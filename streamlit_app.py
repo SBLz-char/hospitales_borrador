@@ -21,6 +21,7 @@ st.caption('Modelo estandarizado — cualquier hospital público de la Red REM 2
 if 'df_subido' not in st.session_state:
     st.session_state.df_subido = None
     st.session_state.archivo_firma = None
+    st.session_state.df_activo = None  # referencia + lo subido, con los nombres ya unificados
 
 col_izq, col_der = st.columns([1, 1.3])
 
@@ -29,6 +30,8 @@ with col_izq:
     archivo = st.file_uploader('CSV de un hospital (mismo formato REM 20)', type=['csv'])
 
     if archivo is None:
+        if st.session_state.archivo_firma is not None:
+            st.session_state.df_activo = None  # se quitó el archivo: hay que rearmar
         st.session_state.df_subido = None
         st.session_state.archivo_firma = None
     else:
@@ -39,7 +42,15 @@ with col_izq:
             st.session_state.df_subido = df_subido
             st.session_state.archivo_mensaje = mensaje
             st.session_state.archivo_es_error = es_error
+            st.session_state.df_activo = None  # cambió el archivo: hay que rearmar
         (st.error if st.session_state.archivo_es_error else st.success)(st.session_state.archivo_mensaje)
+
+    # df_activo se arma una sola vez por archivo y no en cada interacción: combinar la
+    # referencia con un CSV grande y unificar nombres cuesta, y Streamlit re-ejecuta el
+    # script completo cada vez que se toca un widget.
+    if st.session_state.df_activo is None:
+        st.session_state.df_activo = logica.dataframe_activo(st.session_state.df_subido)
+    df_activo = st.session_state.df_activo
 
     st.markdown('**2. Elegir qué predecir**')
     texto_busqueda = st.text_input(
@@ -55,9 +66,23 @@ with col_izq:
     else:
         hospital = st.selectbox('Hospital', opciones_hospital)
 
-    area = st.selectbox('Área funcional', logica.AREAS_REFERENCIA)
+    # Cascade hospital -> área: se ofrecen solo las áreas que ese hospital tiene datos
+    # cargados, en vez de las 29 de la red (ej. Peumo tiene 4). La lógica de datos vive en
+    # logica.areas_disponibles(); acá solo se consume. Como Streamlit re-ejecuta el script
+    # al cambiar el selectbox de hospital, la lista de áreas se actualiza sola.
+    cod_hospital = logica.codigo_de_hospital(df_activo, hospital) if hospital else None
+    areas_hospital = logica.areas_disponibles(df_activo, cod_hospital)
+
+    if areas_hospital:
+        area = st.selectbox('Área funcional', areas_hospital)
+    else:
+        area = None
+        if hospital:
+            st.warning(f'No hay áreas con datos cargados para {hospital}.')
+
     horizonte = st.radio('Horizonte de predicción', list(logica.HORIZONTES.keys()), index=2, horizontal=True)
-    predecir_click = st.button('Predecir ocupación', type='primary', use_container_width=True)
+    predecir_click = st.button('Predecir ocupación', type='primary', use_container_width=True,
+                               disabled=not (hospital and area))
 
 if predecir_click:
     st.session_state.ultimo_resultado = logica.predecir_valor(
