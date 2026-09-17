@@ -124,15 +124,42 @@ def dataframe_activo(df_subido):
     return _aplicar_canon(combinado, canon_hospitales, canon_areas)
 
 
-def hospitales_disponibles(df_subido):
+def ultimo_periodo(df_activo):
+    """(anio, mes) del dato más reciente de todos los datos activos. Es la fecha de corte
+    contra la que se compara cada área para saber si está al día."""
+    idx = int((df_activo['PERIODO'] * 12 + df_activo['MES'] - 1).max())
+    return idx // 12, idx % 12 + 1
+
+
+def anio_vigente(df_activo):
+    """Último año con datos. Un hospital o un área sin datos de este año se considera
+    descontinuado y no se ofrece en los selectores: predecir desde su último mes real
+    devolvería una 'proyección' de un mes que ya pasó (ej. hospitales de campaña que
+    dejaron de reportar en 2020). No está fijo en 2026: si el archivo subido trae un año
+    más nuevo, ese pasa a ser el vigente."""
+    return int(df_activo['PERIODO'].max())
+
+
+def _con_datos_vigentes(df_activo):
+    """Filas del año vigente, que son las que definen qué se ofrece en los selectores."""
+    return df_activo[df_activo['PERIODO'] == anio_vigente(df_activo)]
+
+
+def hospitales_disponibles(df_subido, df_activo=None):
     """Universo de nombres de hospital para el dropdown/selectbox: solo los del archivo
-    subido si hay uno, o los 208 de referencia si no se ha subido nada. Un hospital
-    aparece una sola vez aunque el archivo traiga varias grafías de su nombre."""
+    subido si hay uno, o los de referencia si no se ha subido nada. Un hospital aparece
+    una sola vez aunque el archivo traiga varias grafías de su nombre, y solo si tiene
+    datos del año vigente (ver anio_vigente).
+
+    df_activo es opcional: si la interfaz ya lo tiene armado conviene pasarlo para no
+    recalcularlo en cada interacción."""
+    if df_activo is None:
+        df_activo = dataframe_activo(df_subido)
+    vigentes = _con_datos_vigentes(df_activo)
     if df_subido is not None and not df_subido.empty:
-        canon_hospitales, _ = _canon_por_codigo(df_subido)
-        nombres = df_subido['CODIGO_ESTABLECIMIENTO'].map(canon_hospitales).fillna(df_subido['ESTABLECIMIENTO'])
-        return sorted(nombres.unique().tolist())
-    return HOSPITALES_REFERENCIA
+        codigos = set(df_subido['CODIGO_ESTABLECIMIENTO'])
+        vigentes = vigentes[vigentes['CODIGO_ESTABLECIMIENTO'].isin(codigos)]
+    return sorted(vigentes['ESTABLECIMIENTO'].dropna().unique().tolist())
 
 
 def codigo_de_hospital(df_activo, nombre_hospital):
@@ -158,18 +185,50 @@ def areas_disponibles(df_activo, establecimiento_cod):
     se actualiza sola. En Gradio hay que colgar un hospital_dd.change(...) que devuelva
     gr.update(choices=areas, value=areas[0] if areas else None).
 
+    Solo se devuelven las áreas con datos del año vigente: un área que dejó de reportar
+    antes (ej. hasta 2014) no se ofrece, aunque el hospital siga activo en otras áreas.
+    Para saber hasta qué mes llega cada una, usar cobertura_area().
+
     Si el hospital no tiene ninguna área (lista vacía), conviene deshabilitar el botón de
     predecir: predecir_valor() respondería 'No hay historial real ...' de todos modos."""
     if establecimiento_cod is None:
         return []
-    filas = df_activo[df_activo['CODIGO_ESTABLECIMIENTO'] == establecimiento_cod]
+    filas = _con_datos_vigentes(df_activo)
+    filas = filas[filas['CODIGO_ESTABLECIMIENTO'] == establecimiento_cod]
     return sorted(filas['AREA_FUNCIONAL'].dropna().unique().tolist())
 
 
-def buscar_hospital(texto, df_subido):
+def cobertura_area(df_activo, establecimiento_cod, area_cod):
+    """Desde y hasta qué mes hay datos reales de ese hospital+área, para que la interfaz
+    avise cuando un área no llega al último mes del dataset. Devuelve None si no hay datos.
+
+        {'desde': '01/2014', 'hasta': '05/2026', 'corte_datos': '06/2026',
+         'al_dia': False, 'meses_de_atraso': 1,
+         'desde_anio': 2014, 'desde_mes': 1, 'hasta_anio': 2026, 'hasta_mes': 5}
+
+    'al_dia' es False cuando el área se queda antes del último mes de los datos activos
+    (incluido lo que suba el usuario). Los textos los arma la interfaz."""
+    filas = df_activo[(df_activo['CODIGO_ESTABLECIMIENTO'] == establecimiento_cod) &
+                      (df_activo['COD_AREA_FUNCIONAL'] == area_cod)]
+    if filas.empty:
+        return None
+    idx = filas['PERIODO'] * 12 + filas['MES'] - 1
+    primero, ultimo = int(idx.min()), int(idx.max())
+    corte_anio, corte_mes = ultimo_periodo(df_activo)
+    corte = corte_anio * 12 + corte_mes - 1
+    fmt = lambda i: f'{i % 12 + 1:02d}/{i // 12}'
+    return {
+        'desde': fmt(primero), 'hasta': fmt(ultimo), 'corte_datos': fmt(corte),
+        'al_dia': ultimo >= corte, 'meses_de_atraso': corte - ultimo,
+        'desde_anio': primero // 12, 'desde_mes': primero % 12 + 1,
+        'hasta_anio': ultimo // 12, 'hasta_mes': ultimo % 12 + 1,
+    }
+
+
+def buscar_hospital(texto, df_subido, df_activo=None):
     """Usa sugerir_coincidencias (acepta nombres coloquiales, sin tildes, incompletos)
     en vez del filtro literal de substring de los widgets nativos."""
-    universo = hospitales_disponibles(df_subido)
+    universo = hospitales_disponibles(df_subido, df_activo)
     if not texto:
         return universo
     return sugerir_coincidencias(texto, universo, n=8)
