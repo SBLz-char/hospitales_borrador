@@ -1,0 +1,90 @@
+"""
+App de Streamlit: predicción de ocupación hospitalaria para cualquier hospital público
+de la Red REM 20 (o uno nuevo que suba su propio historial). Alternativa gratuita a
+Hugging Face Spaces, pensada para Streamlit Community Cloud.
+
+Toda la lógica de negocio (carga del modelo, combinar lo subido con lo conocido, armar
+la predicción) vive en logica.py, compartida con app.py (la versión de Gradio) -- acá
+solo se traduce esa lógica a componentes de Streamlit.
+
+Cómo se prueba localmente: `streamlit run streamlit_app.py`.
+"""
+import streamlit as st
+
+import logica
+
+st.set_page_config(page_title='Predicción de Ocupación Hospitalaria', page_icon='🏥', layout='wide')
+
+st.title('Predicción de Ocupación Hospitalaria')
+st.caption('Modelo estandarizado — cualquier hospital público de la Red REM 20')
+
+if 'df_subido' not in st.session_state:
+    st.session_state.df_subido = None
+    st.session_state.archivo_firma = None
+
+col_izq, col_der = st.columns([1, 1.3])
+
+with col_izq:
+    st.markdown('**1. Cargar datos (opcional)**')
+    archivo = st.file_uploader('CSV de un hospital (mismo formato REM 20)', type=['csv'])
+
+    if archivo is None:
+        st.session_state.df_subido = None
+        st.session_state.archivo_firma = None
+    else:
+        firma = (archivo.name, archivo.size)
+        if st.session_state.archivo_firma != firma:
+            df_subido, mensaje, es_error = logica.cargar_archivo_subido(archivo)
+            st.session_state.archivo_firma = firma
+            st.session_state.df_subido = df_subido
+            st.session_state.archivo_mensaje = mensaje
+            st.session_state.archivo_es_error = es_error
+        (st.error if st.session_state.archivo_es_error else st.success)(st.session_state.archivo_mensaje)
+
+    st.markdown('**2. Elegir qué predecir**')
+    texto_busqueda = st.text_input(
+        'Buscar hospital',
+        placeholder='ej. "hospital sotero del rio" (sin tildes, nombre incompleto)',
+    )
+    opciones_hospital = logica.buscar_hospital(texto_busqueda, st.session_state.df_subido) \
+        if texto_busqueda else logica.hospitales_disponibles(st.session_state.df_subido)
+
+    if not opciones_hospital:
+        st.warning('Ningún hospital coincide con esa búsqueda.')
+        hospital = None
+    else:
+        hospital = st.selectbox('Hospital', opciones_hospital)
+
+    area = st.selectbox('Área funcional', logica.AREAS_REFERENCIA)
+    horizonte = st.radio('Horizonte de predicción', list(logica.HORIZONTES.keys()), index=2, horizontal=True)
+    predecir_click = st.button('Predecir ocupación', type='primary', use_container_width=True)
+
+if predecir_click:
+    st.session_state.ultimo_resultado = logica.predecir_valor(
+        hospital, area, horizonte, st.session_state.df_subido
+    )
+
+with col_der:
+    resultado = st.session_state.get('ultimo_resultado')
+    if not resultado:
+        st.info('Elige un hospital, un área y un horizonte, y presiona "Predecir ocupación".')
+    elif not resultado['ok']:
+        (st.error if resultado['es_error'] else st.info)(resultado['mensaje'])
+    else:
+        semaforo = resultado['semaforo']
+        tipo = 'proyección' if resultado['es_prediccion'] else 'dato real'
+        etiqueta_mes = f"{resultado['mes_obj']:02d}/{resultado['anio_obj']}"
+
+        st.markdown(f"### {semaforo['color']} — {semaforo['nivel']}")
+        st.metric(label=f'Índice ocupacional · {tipo} · {etiqueta_mes}', value=f"{resultado['valor']:.1f}%")
+
+        fig = logica.graficar_trayectoria(resultado['trayectoria'])
+        st.pyplot(fig, use_container_width=True)
+
+        rc1, rc2 = st.columns(2)
+        with rc1:
+            st.markdown('**Para gestión hospitalaria**')
+            st.write(semaforo['institucional'])
+        with rc2:
+            st.markdown('**Para la ciudadanía**')
+            st.write(semaforo['ciudadano'])
