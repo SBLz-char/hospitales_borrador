@@ -88,6 +88,7 @@ if predecir_click:
     st.session_state.ultimo_resultado = logica.predecir_valor(
         hospital, area, horizonte, st.session_state.df_subido
     )
+    st.session_state.ultimo_horizonte = horizonte  # para rotular la métrica del resultado
 
 with col_der:
     resultado = st.session_state.get('ultimo_resultado')
@@ -102,6 +103,14 @@ with col_der:
 
         st.markdown(f"### {semaforo['color']} — {semaforo['nivel']}")
         st.metric(label=f'Índice ocupacional · {tipo} · {etiqueta_mes}', value=f"{resultado['valor']:.1f}%")
+
+        # Precisión del modelo: logica.texto_metricas(etiqueta) da la cifra del horizonte
+        # pedido, o la global si se llama sin argumento. Devuelve '' si el .pkl no trae
+        # métricas, así que no hace falta un try/except.
+        texto_precision = logica.texto_metricas(st.session_state.get('ultimo_horizonte'))
+        if texto_precision:
+            st.caption(f'{texto_precision}. Es el error promedio del modelo en la validación '
+                       'histórica, no la precisión de esta predicción en particular.')
 
         fig = logica.graficar_trayectoria(resultado['trayectoria'])
         st.pyplot(fig, use_container_width=True)
