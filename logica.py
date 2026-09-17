@@ -41,64 +41,21 @@ FEATURES = _artefacto['features']
 ARTEFACTOS = _artefacto['artefactos']
 
 
-def _armar_metricas(artefacto):
-    """Métricas de validación que trae el .pkl, en un solo diccionario para la interfaz.
+# ── Métricas de validación del modelo, leídas del .pkl. Son números, no textos: la
+#    interfaz decide cómo mostrarlos. None si el .pkl no las trae. ─────────────────
+_metricas_test = _artefacto.get('metricas_test') or {}
+_por_horizonte = (_artefacto.get('metricas_por_horizonte') or {}).get('horizontes') or {}
 
-    - 'global': error de un paso sobre el test (2025-2026) usando los rezagos reales del
-      dataset. Es la cifra resumen (MAE 7.36 pp, R2 0.86).
-    - 'por_horizonte': error de la predicción recursiva, que es lo que la app realmente
-      hace, con la misma etiqueta que usa HORIZONTES ('1 mes', '2 meses', '3 meses').
-    - 'generalizacion': Leave-N-Hospitals-Out, cuánto empeora el error en hospitales que
-      el modelo nunca vio (brecha promedio de 5 semillas).
+MAE = _metricas_test.get('MAE')  # 7.358 pp
+R2 = _metricas_test.get('R2')    # 0.862
 
-    Ojo al redactar textos: 'MAE_persistencia' es el error de simplemente repetir el
-    último valor real. El modelo solo lo iguala a 1 mes; a 2 y 3 meses la persistencia es
-    mejor, así que la interfaz no debe afirmar que el modelo le gana.
-
-    Si el .pkl es antiguo y no trae alguna sección, queda en None o {} en vez de fallar."""
-    por_horizonte = {}
-    detalle = artefacto.get('metricas_por_horizonte') or {}
-    for etiqueta, meses in HORIZONTES.items():
-        m = (detalle.get('horizontes') or {}).get(str(meses))
-        if m:
-            por_horizonte[etiqueta] = m
-    return {
-        'global': artefacto.get('metricas_test'),
-        'por_horizonte': por_horizonte,
-        'generalizacion': artefacto.get('metricas_lnho'),
-        'periodo': detalle.get('periodo_objetivo', '2025-01 a 2026-06'),
-        'n_casos': detalle.get('n_casos'),
-        'n_hospitales': detalle.get('n_hospitales'),
-        'version_modelo': artefacto.get('version'),
-    }
-
-
-METRICAS = _armar_metricas(_artefacto)
-
-
-def texto_metricas(horizonte_label=None):
-    """Texto corto y listo para mostrar, pensado para una etiqueta fija en la interfaz.
-
-        logica.texto_metricas()            -> 'Precisión histórica (validación 2025-2026):
-                                               MAE 7.4 pp · R² 0.86'
-        logica.texto_metricas('3 meses')   -> 'Precisión a 3 meses (validación 2025-2026):
-                                               MAE 10.1 pp · R² 0.74 · 17.543 casos'
-
-    Son métricas globales de validación, no la precisión de esta predicción en particular:
-    conviene dejarlo escrito al lado (ej. en un st.caption o el help del componente).
-    Devuelve '' si el .pkl no trae métricas, para que la interfaz simplemente no muestre
-    nada en vez de romperse."""
-    m = METRICAS['por_horizonte'].get(horizonte_label) if horizonte_label else METRICAS['global']
-    if not m:
-        m = METRICAS['global']
-        horizonte_label = None
-    if not m:
-        return ''
-    encabezado = f'Precisión a {horizonte_label}' if horizonte_label else 'Precisión histórica'
-    texto = f"{encabezado} (validación {METRICAS['periodo']}): MAE {m['MAE']:.1f} pp · R² {m['R2']:.2f}"
-    if horizonte_label and METRICAS['n_casos']:
-        texto += f" · {METRICAS['n_casos']:,} casos".replace(',', '.')
-    return texto
+# Lo mismo por horizonte, con la etiqueta de HORIZONTES como clave ('1 mes', '2 meses',
+# '3 meses'). Son el error de la predicción recursiva, que es la que hace la app, y es
+# mayor que el de un paso: MAE 7.84 / 9.25 / 10.08 pp.
+MAE_POR_HORIZONTE = {etiqueta: _por_horizonte[str(meses)]['MAE']
+                     for etiqueta, meses in HORIZONTES.items() if str(meses) in _por_horizonte}
+R2_POR_HORIZONTE = {etiqueta: _por_horizonte[str(meses)]['R2']
+                    for etiqueta, meses in HORIZONTES.items() if str(meses) in _por_horizonte}
 
 
 DF_REFERENCIA = pd.read_parquet(RUTA_REFERENCIA)
