@@ -57,8 +57,11 @@ with col_izq:
         'Buscar hospital',
         placeholder='ej. "hospital sotero del rio" (sin tildes, nombre incompleto)',
     )
-    opciones_hospital = logica.buscar_hospital(texto_busqueda, st.session_state.df_subido) \
-        if texto_busqueda else logica.hospitales_disponibles(st.session_state.df_subido)
+    # Solo hospitales con datos del año vigente: los que dejaron de reportar antes (ej.
+    # hospitales de campaña cerrados en 2020) quedan fuera del selector, porque predecir
+    # desde su último mes real devolvería un mes que ya pasó.
+    opciones_hospital = logica.buscar_hospital(texto_busqueda, st.session_state.df_subido, df_activo) \
+        if texto_busqueda else logica.hospitales_disponibles(st.session_state.df_subido, df_activo)
 
     if not opciones_hospital:
         st.warning('Ningún hospital coincide con esa búsqueda.')
@@ -75,6 +78,15 @@ with col_izq:
 
     if areas_hospital:
         area = st.selectbox('Área funcional', areas_hospital)
+        # Aviso de cobertura: logica.cobertura_area() dice desde y hasta qué mes hay datos
+        # reales de esa área. Si no llega al último mes del dataset, se avisa, porque la
+        # predicción parte desde ese último mes y no desde hoy.
+        cobertura = logica.cobertura_area(df_activo, cod_hospital, logica._codigo_area(area, df_activo))
+        if cobertura and not cobertura['al_dia']:
+            st.warning(f'El área "{area}" de {hospital} tiene datos desde '
+                       f'{cobertura["desde"]} hasta {cobertura["hasta"]}, y no hasta '
+                       f'{cobertura["corte_datos"]} como el resto del dataset. '
+                       'La predicción parte desde ese último mes con datos.')
     else:
         area = None
         if hospital:
