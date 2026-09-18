@@ -347,6 +347,104 @@ def predecir_valor(hospital_nombre, area_nombre, horizonte_label, df_subido):
         'ok': True, 'es_error': False, 'mensaje': '',
         'valor': valor, 'semaforo': evaluar_semaforo(valor), 'trayectoria': trayectoria,
         'es_prediccion': es_prediccion, 'anio_obj': anio_obj, 'mes_obj': mes_obj,
+        'establecimiento_cod': establecimiento_cod, 'area_cod': area_cod,
+    }
+
+
+# ── Motor de recomendación de traslado ────────────────────────────────────────────
+
+UMBRAL_TRASLADO = 85.0  # umbral empírico de ICOVID Chile, el mismo del semáforo amarillo
+
+
+def _servicio_por_hospital(df_activo):
+    """{CODIGO_ESTABLECIMIENTO: servicio de salud}, con el nombre más reciente de la GLOSA.
+
+    El .parquet no trae COD_SSS, y tres servicios cambiaron de nombre (Arica -> Arica y
+    Parinacota, Iquique -> Tarapacá, Valdivia -> Los Ríos). Tomando el nombre más reciente
+    de cada hospital, agrupar por este diccionario da exactamente los mismos 29 grupos que
+    agrupar por COD_SSS para los hospitales vigentes (verificado sobre el CSV del REM).
+
+    Ojo: esto es solo para agrupar candidatos. La predicción sigue usando la GLOSA de la
+    primera fila del hospital, que es el nombre que conoce el modelo."""
+    d = df_activo.assign(_ORDEN=df_activo['PERIODO'] * 12 + df_activo['MES'])
+    d = d.sort_values('_ORDEN', kind='stable')
+    return d.groupby('CODIGO_ESTABLECIMIENTO')['GLOSA_SSS'].last().to_dict()
+
+
+def _predecir_par(df_activo, establecimiento_cod, area_cod, anio_obj, mes_obj):
+    """Índice proyectado de un hospital+área para un mes objetivo concreto, con el mismo
+    camino que predecir_valor(). Devuelve None si esa área no puede llegar a ese mes (por
+    ejemplo, su último dato está a más de HORIZONTE_MAXIMO meses)."""
+    filas_hosp = df_activo[df_activo['CODIGO_ESTABLECIMIENTO'] == establecimiento_cod]
+    if filas_hosp.empty:
+        return None
+    area_nombre = filas_hosp.loc[filas_hosp['COD_AREA_FUNCIONAL'] == area_cod, 'AREA_FUNCIONAL']
+    if area_nombre.empty:
+        return None
+    camas_area, complejidad = _camas_y_complejidad(df_activo, establecimiento_cod, area_cod)
+    try:
+        valor, _, _ = predecir_recursivo(
+            MODELO, FEATURES, ARTEFACTOS, df_activo,
+            establecimiento_cod, area_cod, filas_hosp['GLOSA_SSS'].iloc[0], area_nombre.iloc[0],
+            anio_obj, mes_obj, promedio_camas_disponible=camas_area, complejidad_override=complejidad,
+        )
+    except (SinHistorialError, MesFueraDeRangoError, HorizonteFueraDeRangoError):
+        return None
+    return valor
+
+
+def sugerir_traslado(df_activo, establecimiento_cod, area_cod, anio_obj, mes_obj,
+                     umbral=UMBRAL_TRASLADO, maximo=3):
+    """Alternativas de derivación cuando un área queda sobre el umbral (85%).
+
+    Busca en el mismo servicio de salud (equivalente a COD_SSS) los otros hospitales que
+    para ese mismo mes objetivo proyectan menos de `umbral`, y devuelve hasta `maximo`.
+    Primero los que tienen la misma área consultada, ordenados de menor a mayor ocupación;
+    si no alcanzan, se completan con hospitales que tengan otras áreas bajo el umbral.
+    Dentro de cada hospital se listan todas sus áreas bajo el umbral, con la misma área
+    consultada primero.
+
+    Devuelve:
+        {'servicio': 'Metropolitano Oriente', 'umbral': 85.0, 'anio_obj': 2026, 'mes_obj': 9,
+         'hospitales': [{'codigo': 112100, 'nombre': '...', 'misma_area': True,
+                         'areas': [{'area': '...', 'valor': 62.3, 'misma_area': True}, ...]}],
+         'pares_evaluados': 38, 'sin_alternativas': False}
+
+    Con 'sin_alternativas' en True no hay dónde derivar dentro del servicio: ahí
+    corresponde evaluar altas a domicilio según criticidad. El texto lo pone la interfaz."""
+    servicios = _servicio_por_hospital(df_activo)
+    servicio = servicios.get(establecimiento_cod)
+    vigentes = _con_datos_vigentes(df_activo)
+    candidatos = vigentes[vigentes['CODIGO_ESTABLECIMIENTO'].map(servicios) == servicio]
+    candidatos = candidatos[candidatos['CODIGO_ESTABLECIMIENTO'] != establecimiento_cod]
+
+    por_hospital, evaluados = {}, 0
+    for (cod, cod_area), filas in candidatos.groupby(['CODIGO_ESTABLECIMIENTO', 'COD_AREA_FUNCIONAL']):
+        evaluados += 1
+        valor = _predecir_par(df_activo, cod, cod_area, anio_obj, mes_obj)
+        if valor is None or valor >= umbral:
+            continue
+        datos = por_hospital.setdefault(cod, {'codigo': int(cod), 'nombre': filas['ESTABLECIMIENTO'].iloc[0],
+                                              'misma_area': False, 'areas': []})
+        es_misma = cod_area == area_cod
+        datos['areas'].append({'area': filas['AREA_FUNCIONAL'].iloc[0], 'valor': float(valor),
+                               'misma_area': es_misma})
+        datos['misma_area'] = datos['misma_area'] or es_misma
+
+    for datos in por_hospital.values():
+        datos['areas'].sort(key=lambda a: (not a['misma_area'], a['valor']))
+        datos['mejor_valor'] = datos['areas'][0]['valor']
+        datos['valor_misma_area'] = next((a['valor'] for a in datos['areas'] if a['misma_area']), None)
+
+    # los que tienen la misma área van primero, ordenados por esa área; el resto, por su
+    # área más desocupada
+    orden = sorted(por_hospital.values(),
+                   key=lambda h: (not h['misma_area'],
+                                  h['valor_misma_area'] if h['misma_area'] else h['mejor_valor']))
+    elegidos = orden[:maximo]
+    return {
+        'servicio': servicio, 'umbral': umbral, 'anio_obj': anio_obj, 'mes_obj': mes_obj,
+        'hospitales': elegidos, 'pares_evaluados': evaluados, 'sin_alternativas': not elegidos,
     }
 
 
