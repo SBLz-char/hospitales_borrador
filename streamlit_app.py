@@ -118,6 +118,30 @@ with col_der:
         fig = logica.graficar_trayectoria(resultado['trayectoria'])
         st.pyplot(fig, use_container_width=True)
 
+        # Motor de derivación: si el área queda sobre el umbral (85%), se ofrecen los
+        # hospitales del mismo servicio de salud que para ese mismo mes proyectan menos.
+        # Toda la lógica está en logica.sugerir_traslado(); acá solo se arma el listado.
+        if resultado['valor'] > logica.UMBRAL_TRASLADO:
+            with st.spinner('Buscando alternativas de derivación…'):
+                sugerencia = logica.sugerir_traslado(
+                    df_activo, resultado['establecimiento_cod'], resultado['area_cod'],
+                    resultado['anio_obj'], resultado['mes_obj'],
+                )
+            st.markdown(f"**Alternativas de derivación · servicio {sugerencia['servicio']} · "
+                        f"proyección {etiqueta_mes}**")
+            if sugerencia['sin_alternativas']:
+                st.info(f'Ningún otro hospital del servicio {sugerencia["servicio"]} proyecta menos de '
+                        f'{logica.UMBRAL_TRASLADO:.0f}% para {etiqueta_mes}. Con la red sin holgura, '
+                        'corresponde evaluar altas a domicilio de los pacientes que, según su nivel de '
+                        'criticidad, puedan continuar su tratamiento en el hogar.')
+            else:
+                for hospital_alt in sugerencia['hospitales']:
+                    etiqueta = ' · tiene la misma área' if hospital_alt['misma_area'] else ''
+                    st.markdown(f"**{hospital_alt['nombre']}**{etiqueta}")
+                    for area_alt in hospital_alt['areas']:
+                        marca = ' · **misma área consultada**' if area_alt['misma_area'] else ''
+                        st.markdown(f"- {area_alt['area']} — {area_alt['valor']:.1f}%{marca}")
+
         rc1, rc2 = st.columns(2)
         with rc1:
             st.markdown('**Para gestión hospitalaria**')
