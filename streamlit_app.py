@@ -202,13 +202,11 @@ if resultado and resultado['ok']:
 
     st.divider()
     _titulo_centrado('Recomendaciones a seguir')
-    rc1, rc2 = st.columns(2)
-    with rc1:
-        st.subheader('Para gestión hospitalaria')
-        st.markdown(f"- {semaforo['institucional']}")
-    with rc2:
-        st.subheader('Para la ciudadanía')
-        st.markdown(f"- {semaforo['ciudadano']}")
+    # una debajo de la otra, no en dos columnas: se leen como una lista
+    st.subheader('Para gestión hospitalaria')
+    st.markdown(f"- {semaforo['institucional']}")
+    st.subheader('Para la ciudadanía')
+    st.markdown(f"- {semaforo['ciudadano']}")
 
     # Motor de derivación: si el área queda sobre el umbral (85%), se comparan los 2
     # hospitales del mismo servicio de salud que para ese mismo mes proyectan menos.
