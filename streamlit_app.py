@@ -132,11 +132,7 @@ def _titulo_centrado(texto, nivel=2):
 
 
 # Colores del gráfico de alternativas (forma de 'énfasis'): el área recomendada en azul,
-# la más desocupada en naranja y el resto en gris. Validados con el validador de paleta
-# sobre los fondos de Streamlit, en modo claro y oscuro: los tres se distinguen con los
-# tres tipos de daltonismo (ΔE >= 9.5) y a visión normal (ΔE >= 17.5). En modo claro el
-# gris queda bajo 3:1 de contraste, por eso cada barra lleva su valor escrito y hay vista
-# de tabla. El texto usa el color de texto del tema, nunca el de la barra.
+# la más desocupada en naranja y el resto en gris.
 _COLORES_ALTERNATIVAS = {
     'dark': {'Recomendada': '#3987e5', 'Más baja': '#d95926', 'Otras': '#6b6a66', 'texto': '#fafafa'},
     'light': {'Recomendada': '#2a78d6', 'Más baja': '#eb6834', 'Otras': '#a3a29c', 'texto': '#31333f'},
@@ -228,19 +224,21 @@ if resultado and resultado['ok']:
                     'corresponde evaluar altas a domicilio de los pacientes que, según su nivel de '
                     'criticidad, puedan continuar su tratamiento en el hogar.')
         else:
-            for columna, hospital_alt in zip(st.columns(2), sugerencia['hospitales']):
-                with columna:
-                    recomendada = hospital_alt['areas'][0]
-                    mas_baja = min(hospital_alt['areas'], key=lambda a: a['valor'])
-                    _titulo_centrado(hospital_alt['nombre'], nivel=3)
-                    st.markdown(f"**Área recomendada:** {recomendada['area']} — {recomendada['valor']:.1f}%")
-                    if mas_baja['area'] != recomendada['area']:
-                        st.markdown(f"**Más desocupada:** {mas_baja['area']} — {mas_baja['valor']:.1f}%")
-                    st.altair_chart(_grafico_alternativas(hospital_alt['areas']),
-                                    use_container_width=True, theme='streamlit')
-                    with st.expander('Ver valores en tabla'):
-                        st.dataframe(
-                            pd.DataFrame([{'Área': a['area'], 'Índice proyectado (%)': round(a['valor'], 1)}
-                                          for a in hospital_alt['areas']]),
-                            hide_index=True, use_container_width=True,
-                        )
+            # un hospital debajo del otro, cada uno a todo el ancho
+            for posicion, hospital_alt in enumerate(sugerencia['hospitales']):
+                if posicion:
+                    st.divider()
+                recomendada = hospital_alt['areas'][0]
+                mas_baja = min(hospital_alt['areas'], key=lambda a: a['valor'])
+                _titulo_centrado(hospital_alt['nombre'], nivel=3)
+                st.markdown(f"**Área recomendada:** {recomendada['area']} — {recomendada['valor']:.1f}%")
+                if mas_baja['area'] != recomendada['area']:
+                    st.markdown(f"**Más desocupada:** {mas_baja['area']} — {mas_baja['valor']:.1f}%")
+                st.altair_chart(_grafico_alternativas(hospital_alt['areas']),
+                                use_container_width=True, theme='streamlit')
+                with st.expander('Ver valores en tabla'):
+                    st.dataframe(
+                        pd.DataFrame([{'Área': a['area'], 'Índice proyectado (%)': round(a['valor'], 1)}
+                                      for a in hospital_alt['areas']]),
+                        hide_index=True, use_container_width=True,
+                    )
