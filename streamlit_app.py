@@ -105,6 +105,7 @@ if predecir_click:
     st.session_state.ultimo_resultado = logica.predecir_valor(
         hospital, area, horizonte, st.session_state.df_subido
     )
+    st.session_state.ultimo_horizonte = horizonte  # para mostrar el MAE/R² de ese horizonte
 
 with col_der:
     resultado = st.session_state.get('ultimo_resultado')
@@ -119,6 +120,23 @@ with col_der:
 
         st.markdown(f"### {semaforo['color']} — {semaforo['nivel']}")
         st.metric(label=f'Índice ocupacional · {tipo} · {etiqueta_mes}', value=f"{resultado['valor']:.1f}%")
+
+        # Precisión del modelo. Los valores vienen del .pkl a través de logica.py:
+        #   logica.MAE / logica.R2                  -> error global de un paso
+        #   logica.MAE_POR_HORIZONTE[etiqueta]      -> error de la predicción recursiva
+        # Si el .pkl no trae métricas por horizonte, esos diccionarios quedan vacíos y acá
+        # se dice explícitamente (sirve para saber qué .pkl está desplegado).
+        etiqueta_h = st.session_state.get('ultimo_horizonte')
+        mae_h = logica.MAE_POR_HORIZONTE.get(etiqueta_h)
+        r2_h = logica.R2_POR_HORIZONTE.get(etiqueta_h)
+        if logica.MAE is None:
+            st.caption('El modelo cargado no trae métricas guardadas.')
+        elif mae_h is None:
+            st.caption(f'Precisión del modelo (validación) · global: MAE {logica.MAE:.1f} pp · '
+                       f'R² {logica.R2:.2f} · el modelo cargado no trae métricas por horizonte')
+        else:
+            st.caption(f'Precisión del modelo (validación) · global: MAE {logica.MAE:.1f} pp · '
+                       f'R² {logica.R2:.2f} · a {etiqueta_h}: MAE {mae_h:.1f} pp · R² {r2_h:.2f}')
 
         fig = logica.graficar_trayectoria(resultado['trayectoria'])
         st.pyplot(fig, use_container_width=True)
