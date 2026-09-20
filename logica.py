@@ -15,7 +15,12 @@ import pandas as pd
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-from carga_datos import ArchivoVacioError, ColumnasFaltantesError, cargar_csv_hospital
+from carga_datos import (
+    ArchivoIlegibleError,
+    ArchivoVacioError,
+    ColumnasFaltantesError,
+    cargar_csv_hospital,
+)
 from inferencia import (
     HorizonteFueraDeRangoError,
     MesFueraDeRangoError,
@@ -234,20 +239,39 @@ def buscar_hospital(texto, df_subido, df_activo=None):
     return sugerir_coincidencias(texto, universo, n=8)
 
 
-def cargar_archivo_subido(ruta_o_buffer):
-    """Envuelve cargar_csv_hospital devolviendo (df_subido, mensaje, es_error) en vez
-    de lanzar la excepción directamente, para que ambas interfaces puedan mostrar el
-    mensaje sin repetir el try/except."""
+def cargar_archivo_subido_detallado(ruta_o_buffer):
+    """Envuelve cargar_csv_hospital sin lanzar excepciones, para que las interfaces no
+    repitan el try/except. Devuelve:
+
+        {'df': DataFrame o None,
+         'mensaje': texto para mostrarle al usuario,
+         'es_error': bool,
+         'codigo': None | 'estructura' | 'ilegible',
+         'detalle_tecnico': '' o el detalle exacto del fallo}
+
+    'mensaje' nunca trae jerga ni nombres de columnas: al usuario no le sirve saber qué
+    columna falta, porque el formato lo define el REM. El detalle exacto viaja aparte en
+    'detalle_tecnico', por si la interfaz quiere ofrecerlo en un expander opcional o
+    dejarlo en un log."""
     try:
         df_subido = cargar_csv_hospital(ruta_o_buffer)
-    except (ColumnasFaltantesError, ArchivoVacioError) as e:
-        return None, str(e), True
+    except (ColumnasFaltantesError, ArchivoVacioError, ArchivoIlegibleError) as e:
+        return {'df': None, 'mensaje': e.mensaje_usuario, 'es_error': True,
+                'codigo': e.codigo, 'detalle_tecnico': str(e)}
 
     hospitales_subidos = sorted(df_subido['ESTABLECIMIENTO'].unique().tolist())
     filas_descartadas = df_subido.attrs.get('filas_invalidas_descartadas', 0)
     aviso = f' ({filas_descartadas} fila(s) descartadas por datos inválidos.)' if filas_descartadas else ''
     mensaje = f'Archivo cargado: {len(df_subido)} filas · {len(hospitales_subidos)} hospital(es).{aviso}'
-    return df_subido, mensaje, False
+    return {'df': df_subido, 'mensaje': mensaje, 'es_error': False,
+            'codigo': None, 'detalle_tecnico': ''}
+
+
+def cargar_archivo_subido(ruta_o_buffer):
+    """(df_subido, mensaje, es_error) -- la forma corta, que es la que usan hoy las dos
+    interfaces. Para el detalle técnico del fallo, usar cargar_archivo_subido_detallado()."""
+    r = cargar_archivo_subido_detallado(ruta_o_buffer)
+    return r['df'], r['mensaje'], r['es_error']
 
 
 def _sumar_meses(anio, mes, n):
