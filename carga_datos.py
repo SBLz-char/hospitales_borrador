@@ -1,11 +1,19 @@
 """
-Carga y validacion del CSV que sube el usuario en la interfaz. Se detiene con un
-mensaje claro (listando exactamente que falta) en vez de intentar adivinar o rellenar
-columnas ausentes -- la version de prueba solo soporta CSV (separador ';', igual al
-formato oficial de REM 20); Excel queda para una version futura.
+Carga y validacion del CSV que sube el usuario en la interfaz. Se detiene en vez de
+intentar adivinar o rellenar columnas ausentes -- la version de prueba solo soporta CSV
+(separador ';', igual al formato oficial de REM 20); Excel queda para una version futura.
+
+Cada excepcion trae dos textos: el de la excepcion (str(e)) es el detalle tecnico exacto,
+para logs o para un expander opcional, y `mensaje_usuario` es el que ve quien sube el
+archivo. La interfaz muestra solo `mensaje_usuario`: al usuario no le sirve saber que
+columna falta, porque el formato lo define el REM y no el.
 """
 import numpy as np
 import pandas as pd
+
+MENSAJE_ESTRUCTURA_INVALIDA = ('Archivo de datos no válido. Considere subir indicadores REM '
+                               'o con estructura similar a los mismos.')
+MENSAJE_ARCHIVO_ILEGIBLE = 'ERROR: Archivo de datos inválido, intente nuevamente o suba otro archivo.'
 
 # columnas que tienen que venir siempre, sin las cuales no se puede identificar el
 # hospital/area ni construir las features del modelo
@@ -22,26 +30,46 @@ COLUMNAS_TARGET_DERIVADO = ['DIAS_CAMAS_OCUPADAS', 'DIAS_CAMAS_DISPONIBLES']
 
 
 class ColumnasFaltantesError(Exception):
-    """El archivo no trae las columnas minimas necesarias. El mensaje ya viene armado
-    con la lista exacta de lo que falta, lista para mostrar en la interfaz."""
-    pass
+    """El archivo se leyo bien pero no tiene la estructura del REM 20. El detalle con la
+    lista exacta de columnas que faltan queda en el mensaje de la excepcion."""
+    codigo = 'estructura'
+    mensaje_usuario = MENSAJE_ESTRUCTURA_INVALIDA
 
 
 class ArchivoVacioError(Exception):
-    """El archivo se pudo leer pero no tiene filas de datos."""
-    pass
+    """El archivo se pudo leer pero no tiene filas de datos utilizables."""
+    codigo = 'estructura'
+    mensaje_usuario = MENSAJE_ESTRUCTURA_INVALIDA
+
+
+class ArchivoIlegibleError(Exception):
+    """Ni siquiera se pudo abrir como tabla: binario, corrupto, columnas descuadradas,
+    sin cabecera. Es distinto de ColumnasFaltantesError, donde el archivo si se leyo."""
+    codigo = 'ilegible'
+    mensaje_usuario = MENSAJE_ARCHIVO_ILEGIBLE
 
 
 def _leer_csv(ruta_o_buffer):
     """Lee el CSV con el separador oficial de REM 20 (';'). Los CSV que exportan los
     hospitales suelen venir en Latin-1 (tildes/enes rompen en UTF-8 estricto); se
-    intenta UTF-8 primero por ser el estandar mas comun hoy, y se cae a Latin-1 si falla."""
+    intenta UTF-8 primero por ser el estandar mas comun hoy, y se cae a Latin-1 si falla.
+
+    Cualquier otro fallo de lectura (archivo binario, filas descuadradas, archivo sin
+    cabecera) se convierte en ArchivoIlegibleError en vez de reventar la app con el
+    traceback de pandas."""
     try:
         return pd.read_csv(ruta_o_buffer, sep=';', encoding='utf-8')
     except UnicodeDecodeError:
         if hasattr(ruta_o_buffer, 'seek'):
             ruta_o_buffer.seek(0)
-        return pd.read_csv(ruta_o_buffer, sep=';', encoding='latin-1')
+        try:
+            return pd.read_csv(ruta_o_buffer, sep=';', encoding='latin-1')
+        except Exception as e:
+            raise ArchivoIlegibleError(f'No se pudo leer el archivo ni en UTF-8 ni en '
+                                       f'Latin-1: {type(e).__name__}: {e}') from e
+    except Exception as e:
+        raise ArchivoIlegibleError(f'No se pudo leer el archivo como CSV con separador ";": '
+                                   f'{type(e).__name__}: {e}') from e
 
 
 def validar_columnas(df):
@@ -74,8 +102,10 @@ def cargar_csv_hospital(ruta_o_buffer):
     con las columnas minimas que el resto del pipeline espera (mismos nombres que
     dataset_referencia.parquet), listo para concatenar con el historial conocido.
 
-    Lanza ColumnasFaltantesError con el detalle exacto de que falta, o
-    ArchivoVacioError si el archivo no trae filas."""
+    Lanza ArchivoIlegibleError si el archivo ni siquiera se puede abrir como tabla,
+    ColumnasFaltantesError con el detalle exacto de que columna falta, o ArchivoVacioError
+    si el archivo se leyo pero no trae filas utilizables. Las tres traen el texto para el
+    usuario en `mensaje_usuario` y el detalle tecnico en str(e)."""
     df = _leer_csv(ruta_o_buffer)
 
     if df.empty:
