@@ -32,6 +32,12 @@ from inferencia import (
 )
 from pipeline import clasificar_complejidad
 
+# Capa geografica (region, comuna y distancia entre hospitales). Se importa aparte y
+# nunca modifica dataset_referencia.parquet: geo.py cruza su propia tabla de apoyo por
+# CODIGO_ESTABLECIMIENTO solo cuando hay que recomendar. Si falta hospitales_geo.parquet,
+# geo.DISPONIBLE queda en False y todo lo de abajo sigue funcionando sin region ni distancia.
+import geo
+
 DIR_BASE = os.path.dirname(os.path.abspath(__file__))
 RUTA_MODELO = os.path.join(DIR_BASE, 'modelo_ocupacion_hospitalaria_v3.pkl')
 RUTA_REFERENCIA = os.path.join(DIR_BASE, 'dataset_referencia.parquet')
@@ -314,6 +320,47 @@ def _camas_y_complejidad(df_activo, establecimiento_cod, area_cod):
     return camas_area, complejidad
 
 
+def camas_del_area(df_activo, establecimiento_cod, area_cod):
+    """Camas disponibles del area en su ultimo mes con datos, o None.
+
+    Se usa el ultimo mes y no el promedio historico porque lo que le interesa a quien lee
+    es la dotacion de hoy. Ojo: _camas_y_complejidad() -- la que alimenta al modelo -- si
+    usa el promedio, y eso no cambia; esta funcion es solo para mostrar."""
+    filas = df_activo[(df_activo['CODIGO_ESTABLECIMIENTO'] == establecimiento_cod)
+                      & (df_activo['COD_AREA_FUNCIONAL'] == area_cod)]
+    if filas.empty:
+        return None
+    filas = filas.sort_values(['PERIODO', 'MES'])
+    camas = filas['PROMEDIO_CAMAS_DISPONIBLE'].iloc[-1]
+    if pd.isna(camas) or camas <= 0:
+        return None
+    return float(camas)
+
+
+def camas_en_numeros(indice, camas_disponibles):
+    """Traduce un indice ocupacional a camas, para no mostrar solo un porcentaje.
+
+    Devuelve {'disponibles', 'ocupadas', 'libres'} o None si no se conoce la dotacion.
+
+    Hay un matiz que la interfaz debe decir al mostrarlo: el indice del REM son dias-cama
+    ocupados sobre dias-cama disponibles DURANTE EL MES, no una foto de un instante. Asi
+    que 'libres' es un promedio diario del mes, no 'quedan N camas ahora mismo'. Ademas se
+    asume que el hospital mantiene la misma dotacion del ultimo mes conocido: el modelo
+    predice el indice, no cuantas camas va a habilitar el hospital."""
+    if camas_disponibles is None or camas_disponibles <= 0 or indice is None:
+        return None
+    # Se redondea acá y no en cada lugar que lo muestra: redondeando por separado,
+    # 35,5 camas con 50,5% de ocupacion daba '18 ocupadas y 18 libres' sobre un total de
+    # 36. Las libres se derivan de las ocupadas para que la resta siempre cuadre.
+    disponibles = int(round(camas_disponibles))
+    ocupadas = min(int(round(camas_disponibles * indice / 100.0)), disponibles)
+    return {
+        'disponibles': disponibles,
+        'ocupadas': ocupadas,
+        'libres': disponibles - ocupadas,
+    }
+
+
 def predecir_valor(hospital_nombre, area_nombre, horizonte_label, df_subido):
     """Función central que usan las dos interfaces. Devuelve un diccionario plano
     (nunca HTML ni objetos de un framework de UI en particular):
@@ -367,11 +414,20 @@ def predecir_valor(hospital_nombre, area_nombre, horizonte_label, df_subido):
     except (SinHistorialError, MesFueraDeRangoError, HorizonteFueraDeRangoError) as e:
         return {'ok': False, 'es_error': True, 'mensaje': str(e)}
 
+    # camas fisicas del area: lo que pidio el profesor guia -- que el porcentaje se pueda
+    # leer como "de 36 camas, unas 34 ocupadas" y no solo como un numero abstracto
+    camas_disponibles = camas_del_area(df_activo, establecimiento_cod, area_cod)
+
     return {
         'ok': True, 'es_error': False, 'mensaje': '',
         'valor': valor, 'semaforo': evaluar_semaforo(valor), 'trayectoria': trayectoria,
         'es_prediccion': es_prediccion, 'anio_obj': anio_obj, 'mes_obj': mes_obj,
         'establecimiento_cod': establecimiento_cod, 'area_cod': area_cod,
+        'hospital_nombre': hospital_nombre, 'area_nombre': area_nombre,
+        'horizonte_label': horizonte_label,
+        'camas': camas_en_numeros(valor, camas_disponibles),
+        'region': geo.region_de(establecimiento_cod),
+        'comuna': geo.comuna_de(establecimiento_cod),
     }
 
 
@@ -421,16 +477,24 @@ def sugerir_traslado(df_activo, establecimiento_cod, area_cod, anio_obj, mes_obj
                      umbral=UMBRAL_TRASLADO, maximo=3):
     """Alternativas de derivación cuando un área queda sobre el umbral (85%).
 
-    Busca en el mismo servicio de salud (equivalente a COD_SSS) los otros hospitales que
-    para ese mismo mes objetivo proyectan menos de `umbral`, y devuelve hasta `maximo`.
-    Primero los que tienen la misma área consultada, ordenados de menor a mayor ocupación;
-    si no alcanzan, se completan con hospitales que tengan otras áreas bajo el umbral.
-    Dentro de cada hospital se listan todas sus áreas bajo el umbral, con la misma área
-    consultada primero.
+    Busca los otros hospitales del mismo servicio de salud Y de la misma región que para
+    ese mismo mes objetivo proyectan menos de `umbral`, y devuelve hasta `maximo`.
+    Primero los que tienen la misma área consultada y, dentro de cada grupo, el más cercano
+    primero; si no alcanzan, se completan con hospitales que tengan otras áreas bajo el
+    umbral. Dentro de cada hospital se listan todas sus áreas bajo el umbral, con la misma
+    área consultada primero.
+
+    El filtro por región (geo.misma_region) existe porque pertenecer al mismo servicio de
+    salud no garantiza estar en la misma región: Hanga Roa depende del Metropolitano
+    Oriente pero está en Isla de Pascua, y sin este filtro la app lo ofrecía como destino
+    de traslado para hospitales de Santiago, a 3.768 km.
 
     Devuelve:
-        {'servicio': 'Metropolitano Oriente', 'umbral': 85.0, 'anio_obj': 2026, 'mes_obj': 9,
-         'hospitales': [{'codigo': 112100, 'nombre': '...', 'misma_area': True,
+        {'servicio': 'Metropolitano Oriente', 'region': 'Metropolitana de Santiago',
+         'umbral': 85.0, 'anio_obj': 2026, 'mes_obj': 9,
+         'hospitales': [{'codigo': 112104, 'nombre': '...', 'misma_area': True,
+                         'comuna': 'Providencia', 'distancia_km': 0.23,
+                         'distancia_texto': '232 m', 'camas': {...} | None,
                          'areas': [{'area': '...', 'valor': 62.3, 'misma_area': True}, ...]}],
          'pares_evaluados': 38, 'sin_alternativas': False}
 
@@ -441,6 +505,13 @@ def sugerir_traslado(df_activo, establecimiento_cod, area_cod, anio_obj, mes_obj
     vigentes = _con_datos_vigentes(df_activo)
     candidatos = vigentes[vigentes['CODIGO_ESTABLECIMIENTO'].map(servicios) == servicio]
     candidatos = candidatos[candidatos['CODIGO_ESTABLECIMIENTO'] != establecimiento_cod]
+    # mismo servicio no siempre es misma región (ver el docstring). La región la pone el
+    # DEIS, no una lista escrita a mano; sin la tabla geográfica esto no filtra nada y el
+    # comportamiento vuelve a ser el de antes.
+    if geo.DISPONIBLE:
+        codigos_misma_region = [c for c in candidatos['CODIGO_ESTABLECIMIENTO'].unique()
+                                if geo.misma_region(establecimiento_cod, c)]
+        candidatos = candidatos[candidatos['CODIGO_ESTABLECIMIENTO'].isin(codigos_misma_region)]
 
     por_hospital, evaluados = {}, 0
     for (cod, cod_area), filas in candidatos.groupby(['CODIGO_ESTABLECIMIENTO', 'COD_AREA_FUNCIONAL']):
@@ -448,26 +519,48 @@ def sugerir_traslado(df_activo, establecimiento_cod, area_cod, anio_obj, mes_obj
         valor = _predecir_par(df_activo, cod, cod_area, anio_obj, mes_obj)
         if valor is None or valor >= umbral:
             continue
-        datos = por_hospital.setdefault(cod, {'codigo': int(cod), 'nombre': filas['ESTABLECIMIENTO'].iloc[0],
-                                              'misma_area': False, 'areas': []})
+        if cod not in por_hospital:
+            km = geo.distancia_km(establecimiento_cod, cod)
+            por_hospital[cod] = {
+                'codigo': int(cod), 'nombre': filas['ESTABLECIMIENTO'].iloc[0],
+                'misma_area': False, 'areas': [],
+                'comuna': geo.comuna_de(cod), 'distancia_km': km,
+                'distancia_texto': geo.texto_distancia(km),
+            }
+        datos = por_hospital[cod]
         es_misma = cod_area == area_cod
         datos['areas'].append({'area': filas['AREA_FUNCIONAL'].iloc[0], 'valor': float(valor),
                                'misma_area': es_misma})
         datos['misma_area'] = datos['misma_area'] or es_misma
 
-    for datos in por_hospital.values():
+    for cod, datos in por_hospital.items():
         datos['areas'].sort(key=lambda a: (not a['misma_area'], a['valor']))
         datos['mejor_valor'] = datos['areas'][0]['valor']
         datos['valor_misma_area'] = next((a['valor'] for a in datos['areas'] if a['misma_area']), None)
+        # camas físicas del área recomendada, para poder decir "unas 9 camas libres" y no
+        # solo "62,3%"
+        recomendada = datos['areas'][0]
+        cod_area_rec = _codigo_area(recomendada['area'], df_activo)
+        datos['camas'] = (camas_en_numeros(recomendada['valor'],
+                                           camas_del_area(df_activo, cod, cod_area_rec))
+                          if cod_area_rec is not None else None)
 
-    # los que tienen la misma área van primero, ordenados por esa área; el resto, por su
-    # área más desocupada
+    # Orden de las alternativas, en tres criterios:
+    #   1. los que tienen la misma área consultada van primero (criterio clínico: se deriva
+    #      a una unidad equivalente, no a cualquier cama libre);
+    #   2. dentro de cada grupo, el más cercano primero -- entre dos hospitales que igual
+    #      están bajo el umbral, uno a 3 km es mejor destino que uno a 40;
+    #   3. a igual distancia, el más desocupado.
+    # Sin tabla geográfica todas las distancias son None, el criterio 2 se anula solo y
+    # queda exactamente el orden anterior (misma área, luego ocupación).
     orden = sorted(por_hospital.values(),
                    key=lambda h: (not h['misma_area'],
+                                  h['distancia_km'] if h['distancia_km'] is not None else float('inf'),
                                   h['valor_misma_area'] if h['misma_area'] else h['mejor_valor']))
     elegidos = orden[:maximo]
     return {
-        'servicio': servicio, 'umbral': umbral, 'anio_obj': anio_obj, 'mes_obj': mes_obj,
+        'servicio': servicio, 'region': geo.region_de(establecimiento_cod),
+        'umbral': umbral, 'anio_obj': anio_obj, 'mes_obj': mes_obj,
         'hospitales': elegidos, 'pares_evaluados': evaluados, 'sin_alternativas': not elegidos,
     }
 

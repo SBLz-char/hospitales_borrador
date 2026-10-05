@@ -23,6 +23,7 @@ import altair as alt  # viene incluido con Streamlit: no hay que agregarlo a req
 import pandas as pd
 import streamlit as st
 
+import explicacion
 import logica
 
 st.set_page_config(page_title='Predicción de Ocupación Hospitalaria', page_icon='🏥', layout='wide')
@@ -53,6 +54,7 @@ if _ES_OSCURO:
         margin_bg='rgba(255,255,255,.08)', margin_fg='#c3c2b7',
         reco_inst_bg='#152438', reco_inst_icon='#1c3352', reco_cit_bg='#211a35', reco_cit_icon='#2f2650',
         reco_text='#d6d4cf',
+        explica_bg='#17211c', explica_borde='#2f7d5b', explica_titulo='#6fbf9a',
     )
 else:
     _T = dict(
@@ -63,6 +65,7 @@ else:
         margin_bg='#f0efec', margin_fg='#52514e',
         reco_inst_bg='#eaf1fc', reco_inst_icon='#d7e6fa', reco_cit_bg='#f1edfc', reco_cit_icon='#e2d8f8',
         reco_text='#2f333d',
+        explica_bg='#eef6f1', explica_borde='#2f7d5b', explica_titulo='#2a6a4d',
     )
 # los "dot" de cada badge (VERDE/AZUL/AMARILLO/ROJO) usan siempre el tono de estado puro,
 # tanto en claro como en oscuro -- solo el color del TEXTO de la insignia se atenúa en
@@ -96,6 +99,13 @@ st.markdown(f"""
 .reco-icon.role-cit {{ background:{_T['reco_cit_icon']}; }}
 .reco-card p {{ font-size:14px; line-height:1.45; color:{_T['reco_text']}; margin:4px 0 0; }}
 .reco-card b {{ font-size:14.5px; letter-spacing:.2px; }}
+.caja-explica {{ background:{_T['explica_bg']}; border-left:4px solid {_T['explica_borde']};
+                 border-radius:10px; padding:14px 16px; margin-top:4px; }}
+.caja-explica p {{ font-size:14px; line-height:1.55; color:{_T['reco_text']}; margin:0; }}
+.caja-explica .titulo {{ font-size:12px; font-weight:700; letter-spacing:.4px;
+                        text-transform:uppercase; color:{_T['explica_titulo']}; margin-bottom:6px; }}
+.camas-linea {{ display:inline-block; font-size:13px; color:{_T['pill_fg']}; background:{_T['margin_bg']};
+               padding:6px 12px; border-radius:8px; margin:2px 0 8px; }}
 h1#predicci-n-de-ocupaci-n-hospitalaria, .stApp h1 {{ font-size: 26px !important; }}
 </style>
 """, unsafe_allow_html=True)
@@ -103,6 +113,16 @@ h1#predicci-n-de-ocupaci-n-hospitalaria, .stApp h1 {{ font-size: 26px !important
 # .streamlit/config.toml con [theme.light]/[theme.dark] (primaryColor en cada uno), no CSS
 # a mano -- así Streamlit lo aplica solo, de forma consistente, en todos sus widgets
 # nativos, y el usuario conserva el selector System/Light/Dark del menú ⋮.
+
+# La clave de la API para la explicación con IA se lee de los Secrets de Streamlit
+# (Manage app -> Settings -> Secrets) y se le pasa a explicacion.py, que es el único que la
+# usa. Nunca va en el código ni en el repositorio. Si no está configurada, explicacion.py
+# usa su texto determinista y la app funciona igual -- st.secrets lanza excepción cuando no
+# hay archivo de secretos, así que la lectura va protegida.
+try:
+    explicacion.configurar_clave(st.secrets.get('ANTHROPIC_API_KEY'))
+except Exception:
+    explicacion.configurar_clave(None)
 
 st.title('🏥 Predicción de Ocupación Hospitalaria')
 st.caption('Modelo estandarizado — cualquier hospital público de la Red REM 20')
@@ -235,6 +255,21 @@ if predecir_click:
     st.session_state.ultimo_resultado = logica.predecir_valor(
         hospital, area, horizonte, st.session_state.df_subido
     )
+    # El horizonte se guarda junto al resultado porque Streamlit re-ejecuta el script con
+    # cada interacción: sin esto, mover el selector después de predecir mostraría el margen
+    # de error de un horizonte distinto al que se predijo.
+    st.session_state.ultimo_horizonte = horizonte
+    # La sugerencia de traslado se calcula acá, una vez por predicción, y no en cada
+    # re-ejecución: corre entre 30 y 90 predicciones del modelo, así que repetirla al tocar
+    # cualquier widget era trabajo perdido.
+    st.session_state.ultima_sugerencia = None
+    resultado_nuevo = st.session_state.ultimo_resultado
+    if resultado_nuevo['ok'] and resultado_nuevo['valor'] > logica.UMBRAL_TRASLADO:
+        with st.spinner('Buscando alternativas de derivación…'):
+            st.session_state.ultima_sugerencia = logica.sugerir_traslado(
+                df_activo, resultado_nuevo['establecimiento_cod'], resultado_nuevo['area_cod'],
+                resultado_nuevo['anio_obj'], resultado_nuevo['mes_obj'], maximo=2,
+            )
 
 
 # ── Gráfico de trayectoria (Altair, reemplaza el matplotlib de logica.graficar_trayectoria
@@ -408,14 +443,28 @@ with col_der, st.container(border=True):
         # ocupación), como una letra chica bajo el resultado. El expander de abajo explica
         # ese margen en una sola idea, sin R² ni palabras como "validación" o "entrenamiento"
         # -- quien quiera el detalle estadístico completo puede pedirlo directamente.
+        # Punto del profesor guía: el porcentaje por sí solo no dice cuántas camas son.
+        # logica.predecir_valor() ya deja el cálculo hecho en resultado['camas'] (None si no
+        # se conoce la dotación del área). Se habla de promedio del mes porque el índice del
+        # REM son días-cama ocupados sobre días-cama disponibles durante el mes, no una foto.
+        camas = resultado.get('camas')
+        if camas:
+            st.markdown(
+                f'<span class="camas-linea">🛏️ De {camas["disponibles"]:.0f} camas del área, '
+                f'unas {camas["ocupadas"]:.0f} ocupadas y {camas["libres"]:.0f} libres '
+                f'(promedio del mes)</span>',
+                unsafe_allow_html=True,
+            )
+
+        horizonte_predicho = st.session_state.get('ultimo_horizonte', horizonte)
         if logica.MAE is not None and resultado['es_prediccion']:
-            mae_horizonte = logica.MAE_POR_HORIZONTE.get(horizonte, logica.MAE)
-            es_global = horizonte not in logica.MAE_POR_HORIZONTE
+            mae_horizonte = logica.MAE_POR_HORIZONTE.get(horizonte_predicho, logica.MAE)
+            es_global = horizonte_predicho not in logica.MAE_POR_HORIZONTE
             st.markdown(f'<span class="margin-pill">📏 Margen de error típico: '
                         f'±{mae_horizonte:.1f} puntos porcentuales</span>', unsafe_allow_html=True)
             with st.expander('¿Qué tan confiable es esta predicción?'):
                 nota_global = (f'\n\n*(Este margen todavía es general para el modelo, no específico '
-                                f'para {horizonte}.)*' if es_global else '')
+                                f'para {horizonte_predicho}.)*' if es_global else '')
                 st.markdown(
                     f"El modelo no acierta siempre el número exacto: en pruebas anteriores, se equivocó "
                     f"en promedio por **±{mae_horizonte:.1f} puntos**. Así que el **{resultado['valor']:.1f}%** "
@@ -426,6 +475,28 @@ with col_der, st.container(border=True):
         st.altair_chart(_grafico_trayectoria(resultado['trayectoria']), use_container_width=True,
                         theme='streamlit')
         st.caption('— Real (línea sólida) ┄ Proyectado (línea punteada)')
+
+        # ── Explicación en palabras simples, debajo del gráfico ──────────────────
+        # Todo el contenido sale de explicacion.py: los números los calcula Python y la IA
+        # solo los redacta, con una verificación que descarta el texto si menciona una cifra
+        # que no se le entregó. Si no hay clave de API, si falla la llamada o si el texto no
+        # pasa esa verificación, se muestra la versión determinista -- nunca queda vacío.
+        hechos = explicacion.construir_hechos(
+            resultado,
+            sugerencia=st.session_state.get('ultima_sugerencia'),
+            mae=logica.MAE_POR_HORIZONTE.get(horizonte_predicho, logica.MAE),
+        )
+        explicada = explicacion.explicar(hechos)
+        st.markdown(
+            f'<div class="caja-explica"><div class="titulo">Qué significa esto</div>'
+            f'<p>{html.escape(explicada["texto"])}</p></div>',
+            unsafe_allow_html=True,
+        )
+        if explicada['origen'] == 'plantilla' and explicacion.hay_ia_disponible():
+            # solo interesa avisar cuando la IA estaba configurada y aun así no se usó: ahí
+            # hay algo que revisar (clave, red, o un texto descartado por la verificación)
+            with st.expander('Por qué este texto no se generó con IA'):
+                st.caption(explicada['detalle'])
 
 
 # ── Recomendaciones: sección de ancho completo, debajo del botón y del gráfico ─────
@@ -558,13 +629,22 @@ if resultado and resultado['ok']:
         st.write('')
         with st.container(border=True):
             _titulo_centrado('Sugerencia de hospitales para traslado')
-            with st.spinner('Buscando alternativas de derivación…'):
-                sugerencia = logica.sugerir_traslado(
-                    df_activo, resultado['establecimiento_cod'], resultado['area_cod'],
-                    resultado['anio_obj'], resultado['mes_obj'], maximo=2,
-                )
-            st.markdown(f"<p style='text-align:center'>Servicio de salud {html.escape(str(sugerencia['servicio']))} "
-                        f"· proyección {etiqueta_mes} · áreas bajo {logica.UMBRAL_TRASLADO:.0f}%</p>",
+            # ya calculada al momento de predecir (ver más arriba); si por algún motivo no
+            # está en la sesión, se calcula acá para no dejar la sección vacía
+            sugerencia = st.session_state.get('ultima_sugerencia')
+            if sugerencia is None:
+                with st.spinner('Buscando alternativas de derivación…'):
+                    sugerencia = logica.sugerir_traslado(
+                        df_activo, resultado['establecimiento_cod'], resultado['area_cod'],
+                        resultado['anio_obj'], resultado['mes_obj'], maximo=2,
+                    )
+                st.session_state.ultima_sugerencia = sugerencia
+            ambito = f"Servicio de salud {html.escape(str(sugerencia['servicio']))}"
+            if sugerencia.get('region'):
+                ambito += f" · región {html.escape(str(sugerencia['region']))}"
+            st.markdown(f"<p style='text-align:center'>{ambito} "
+                        f"· proyección {etiqueta_mes} · áreas bajo {logica.UMBRAL_TRASLADO:.0f}% "
+                        f"· ordenadas por cercanía</p>",
                         unsafe_allow_html=True)
 
             if sugerencia['sin_alternativas']:
@@ -580,7 +660,21 @@ if resultado and resultado['ok']:
                     recomendada = hospital_alt['areas'][0]
                     mas_baja = min(hospital_alt['areas'], key=lambda a: a['valor'])
                     _titulo_centrado(hospital_alt['nombre'], nivel=3)
+                    # dónde queda y a qué distancia: el dato que convierte una lista de
+                    # nombres en una alternativa evaluable
+                    ubicacion = []
+                    if hospital_alt.get('comuna'):
+                        ubicacion.append(f"comuna de {hospital_alt['comuna']}")
+                    if hospital_alt.get('distancia_texto'):
+                        ubicacion.append(f"a {hospital_alt['distancia_texto']} en línea recta")
+                    if ubicacion:
+                        st.markdown(f"<p style='text-align:center'>📍 {html.escape(' · '.join(ubicacion))}</p>",
+                                    unsafe_allow_html=True)
                     st.markdown(f"**Área recomendada:** {recomendada['area']} — {recomendada['valor']:.1f}%")
+                    camas_alt = hospital_alt.get('camas')
+                    if camas_alt:
+                        st.markdown(f"🛏️ De {camas_alt['disponibles']:.0f} camas, unas "
+                                    f"{camas_alt['libres']:.0f} estarían libres (promedio del mes)")
                     if mas_baja['area'] != recomendada['area']:
                         st.markdown(f"**Más desocupada:** {mas_baja['area']} — {mas_baja['valor']:.1f}%")
                     st.altair_chart(_grafico_alternativas(hospital_alt['areas']),
