@@ -9,8 +9,8 @@ solo se traduce esa lógica a componentes de Streamlit.
 
 Estilo visual: tarjetas con st.container(border=True) + una hoja de estilos chica
 inyectada abajo (insignia de estado, número hero, pastillas de fecha/margen de error),
-con soporte de modo oscuro (ver _ES_OSCURO más abajo, y [theme.light]/[theme.dark] en
-.streamlit/config.toml). Es solo piel -- ningún cambio acá toca
+con soporte de modo claro y oscuro (ver "Colores que siguen al tema" más abajo, y
+[theme.light]/[theme.dark] en .streamlit/config.toml). Es solo piel -- ningún cambio acá toca
 logica.py/carga_datos.py/inferencia.py, así que el resultado de cada predicción es
 exactamente el mismo que antes.
 
@@ -28,78 +28,58 @@ import mapa
 
 st.set_page_config(page_title='Predicción de Ocupación Hospitalaria', page_icon='🏥', layout='wide')
 
-# ── Modo oscuro ─────────────────────────────────────────────────────────────────────
-# st.context.theme.type refleja el tema REALMENTE aplicado (System/Light/Dark, lo que el
-# usuario haya elegido en el menú ⋮ de Streamlit), a diferencia de @media
-# (prefers-color-scheme) que solo ve la preferencia del sistema operativo -- por eso el
-# color de cada elemento propio (badges, tarjetas, gráficos) se decide acá, en Python, en
-# vez de con una media query en el CSS. Ojo: este valor se actualiza recién en el próximo
-# rerun después de cambiar el tema (ej. al tocar cualquier filtro), no de forma instantánea
-# -- una limitación conocida de Streamlit, no de esta app.
-_ES_OSCURO = st.context.theme.type == 'dark'
+# ── Colores que siguen al tema ───────────────────────────────────────────────────────
+# Ningún color propio se decide en Python. Antes se elegía una paleta clara u oscura con
+# st.context.theme.type, pero ese valor se actualiza recién en la siguiente ejecución del
+# script: al cambiar de tema desde el menú ⋮, Streamlit cambiaba sus componentes al
+# instante y los nuestros quedaban con la paleta anterior hasta tocar cualquier filtro. En
+# tema claro eso dejaba el número de la predicción en blanco sobre blanco.
+#
+# Ahora cada color se arma en el navegador a partir del color de texto que Streamlit está
+# usando en ese momento (currentColor), con color-mix(): los textos heredan ese color, los
+# fondos son ese mismo color o un color de estado muy transparente, y los textos de estado
+# mezclan el color de estado con el del texto (más oscuro en claro, más claro en oscuro).
+# Así todo cambia en el mismo instante que Streamlit, sin depender de una nueva ejecución.
 
 # ── Estilo (Estilo 1 "clínico moderno" del mockup) ─────────────────────────────────
 # Solo CSS -- ningún selector de acá cambia el valor que devuelve un widget, así que si
 # una regla no calza con una versión futura de Streamlit, en el peor caso se pierde el
-# detalle visual (ej. el color del botón), nunca la funcionalidad. Los tokens de color se
-# arman abajo según _ES_OSCURO en vez de venir fijos, para que las tarjetas/badges propios
-# no queden con fondo claro sobre un Streamlit en modo oscuro (o viceversa).
-if _ES_OSCURO:
-    _T = dict(
-        badge_good='#0ca30c', badge_neutral='#c3c2b7', badge_warning='#fab219', badge_critical='#d03b3b',
-        badge_good_bg='rgba(12,163,12,.18)', badge_neutral_bg='rgba(255,255,255,.08)',
-        badge_warning_bg='rgba(250,178,25,.18)', badge_critical_bg='rgba(208,59,59,.22)',
-        hero_num='#fafafa', hero_small='#9c9a94', hero_label='#948f89',
-        pill_bg='rgba(255,255,255,.06)', pill_border='rgba(255,255,255,.16)', pill_fg='#c3c2b7',
-        margin_bg='rgba(255,255,255,.08)', margin_fg='#c3c2b7',
-        reco_inst_bg='#152438', reco_inst_icon='#1c3352', reco_cit_bg='#211a35', reco_cit_icon='#2f2650',
-        reco_text='#d6d4cf',
-    )
-else:
-    _T = dict(
-        badge_good='#0ca30c', badge_neutral='#45586b', badge_warning='#a3690a', badge_critical='#c2453f',
-        badge_good_bg='#eaf7ea', badge_neutral_bg='#eef1f5', badge_warning_bg='#fdf3e0', badge_critical_bg='#fbeae7',
-        hero_num='#0b0b0b', hero_small='#6b6a66', hero_label='#898781',
-        pill_bg='#ffffff', pill_border='#e1e0d9', pill_fg='#52514e',
-        margin_bg='#f0efec', margin_fg='#52514e',
-        reco_inst_bg='#eaf1fc', reco_inst_icon='#d7e6fa', reco_cit_bg='#f1edfc', reco_cit_icon='#e2d8f8',
-        reco_text='#2f333d',
-    )
-# los "dot" de cada badge (VERDE/AZUL/AMARILLO/ROJO) usan siempre el tono de estado puro,
-# tanto en claro como en oscuro -- solo el color del TEXTO de la insignia se atenúa en
-# modo claro para que no quede demasiado saturado sobre un fondo pastel
-_DOT = {'good': '#0ca30c', 'neutral': _T['badge_neutral'] if _ES_OSCURO else '#45586b',
-        'warning': '#eda100', 'critical': '#d03b3b'}
-
-st.markdown(f"""
+# detalle visual (ej. el color del botón), nunca la funcionalidad.
+st.markdown("""
 <style>
-.badge {{ display:inline-flex; align-items:center; gap:8px; font-size:14px; font-weight:600;
-         padding:6px 14px; border-radius:999px; margin-bottom:10px; }}
-.badge .dot {{ width:10px; height:10px; border-radius:50%; flex-shrink:0; }}
-.badge-good {{ background:{_T['badge_good_bg']}; color:{_T['badge_good']}; }} .badge-good .dot {{ background:{_DOT['good']}; }}
-.badge-neutral {{ background:{_T['badge_neutral_bg']}; color:{_T['badge_neutral']}; }} .badge-neutral .dot {{ background:{_DOT['neutral']}; }}
-.badge-warning {{ background:{_T['badge_warning_bg']}; color:{_T['badge_warning']}; }} .badge-warning .dot {{ background:{_DOT['warning']}; }}
-.badge-critical {{ background:{_T['badge_critical_bg']}; color:{_T['badge_critical']}; }} .badge-critical .dot {{ background:{_DOT['critical']}; }}
-.hero-num {{ font-size:44px; font-weight:700; line-height:1; color:{_T['hero_num']}; }}
-.hero-num small {{ font-size:20px; font-weight:600; color:{_T['hero_small']}; margin-left:2px; }}
-.hero-label {{ font-size:12.5px; color:{_T['hero_label']}; margin:2px 0 10px; }}
-.pill-info {{ display:inline-block; font-size:12px; color:{_T['pill_fg']}; background:{_T['pill_bg']};
-             border:1px solid {_T['pill_border']}; padding:6px 13px; border-radius:999px; }}
-.margin-pill {{ display:inline-block; font-size:12px; color:{_T['margin_fg']}; background:{_T['margin_bg']};
-               padding:5px 11px; border-radius:8px; margin:2px 0 8px; }}
-.reco-card {{ display:flex; gap:14px; align-items:center; min-height:74px; padding:18px 20px;
-             border-radius:14px; }}
-.reco-card.role-inst {{ background:{_T['reco_inst_bg']}; }}
-.reco-card.role-cit {{ background:{_T['reco_cit_bg']}; }}
-.reco-icon {{ width:46px; height:46px; min-width:46px; border-radius:13px;
-             display:flex; align-items:center; justify-content:center; font-size:21px; }}
-.reco-icon.role-inst {{ background:{_T['reco_inst_icon']}; }}
-.reco-icon.role-cit {{ background:{_T['reco_cit_icon']}; }}
-.reco-card p {{ font-size:14px; line-height:1.45; color:{_T['reco_text']}; margin:4px 0 0; }}
-.reco-card b {{ font-size:14.5px; letter-spacing:.2px; }}
-.camas-linea {{ display:inline-block; font-size:13px; color:{_T['pill_fg']}; background:{_T['margin_bg']};
-               padding:6px 12px; border-radius:8px; margin:2px 0 8px; }}
-h1#predicci-n-de-ocupaci-n-hospitalaria, .stApp h1 {{ font-size: 26px !important; }}
+.badge { display:inline-flex; align-items:center; gap:8px; font-size:14px; font-weight:600;
+         padding:6px 14px; border-radius:999px; margin-bottom:10px;
+         color:color-mix(in srgb, var(--estado) 72%, currentColor);
+         background:color-mix(in srgb, var(--estado) 16%, transparent); }
+.badge .dot { width:10px; height:10px; border-radius:50%; flex-shrink:0; background:var(--estado); }
+.badge-good { --estado:#0ca30c; }
+.badge-neutral { --estado:#6b7a8c; }
+.badge-warning { --estado:#e09a00; }
+.badge-critical { --estado:#d03b3b; }
+.hero-num { font-size:44px; font-weight:700; line-height:1; color:inherit; }
+.hero-num small { font-size:20px; font-weight:600; margin-left:2px;
+                  color:color-mix(in srgb, currentColor 65%, transparent); }
+.hero-label { font-size:12.5px; margin:2px 0 10px;
+              color:color-mix(in srgb, currentColor 68%, transparent); }
+.pill-info { display:inline-block; font-size:12px; padding:6px 13px; border-radius:999px;
+             color:color-mix(in srgb, currentColor 80%, transparent);
+             background:color-mix(in srgb, currentColor 5%, transparent);
+             border:1px solid color-mix(in srgb, currentColor 20%, transparent); }
+.margin-pill { display:inline-block; font-size:12px; padding:5px 11px; border-radius:8px; margin:2px 0 8px;
+               color:color-mix(in srgb, currentColor 80%, transparent);
+               background:color-mix(in srgb, currentColor 8%, transparent); }
+.reco-card { display:flex; gap:14px; align-items:center; min-height:74px; padding:18px 20px;
+             border-radius:14px; color:inherit; }
+.reco-card.role-inst { background:color-mix(in srgb, #2a78d6 13%, transparent); }
+.reco-card.role-cit { background:color-mix(in srgb, #7c4dcc 13%, transparent); }
+.reco-icon { width:46px; height:46px; min-width:46px; border-radius:13px;
+             display:flex; align-items:center; justify-content:center; font-size:21px; }
+.reco-icon.role-inst { background:color-mix(in srgb, #2a78d6 24%, transparent); }
+.reco-icon.role-cit { background:color-mix(in srgb, #7c4dcc 24%, transparent); }
+.reco-card p { font-size:14px; line-height:1.45; margin:4px 0 0;
+               color:color-mix(in srgb, currentColor 88%, transparent); }
+.reco-card b { font-size:14.5px; letter-spacing:.2px; color:inherit; }
+h1#predicci-n-de-ocupaci-n-hospitalaria, .stApp h1 { font-size: 26px !important; }
 </style>
 """, unsafe_allow_html=True)
 # El color de acento (botón primario, st.pills seleccionado, foco de inputs) lo fija
@@ -258,16 +238,15 @@ if predecir_click:
 # ── Gráfico de trayectoria (Altair, reemplaza el matplotlib de logica.graficar_trayectoria
 #    solo para Streamlit -- Gradio/app.py sigue usando la versión de logica.py sin cambios) ──
 
-# Colores del gráfico de trayectoria: el crítico (rojo) no cambia entre modos porque el
-# mismo tono ya cumple contraste 3:1+ tanto en fondo claro como oscuro; el acento y la
-# banda de alerta sí usan su paso más claro sobre fondo oscuro, siguiendo la paleta
-# categórica de referencia (slot 1 azul, slot 4 amarillo).
-_ACCENT = '#3987e5' if _ES_OSCURO else '#2a78d6'
+# Colores del gráfico de trayectoria: una sola paleta para claro y oscuro, por lo explicado
+# en "Colores que siguen al tema". Son tonos medios, con contraste suficiente sobre fondo
+# blanco y sobre fondo oscuro. La etiqueta del último valor va en el mismo azul de la línea:
+# el tema de Streamlit no le da color a los textos de Altair (sin color quedan negros, y en
+# tema oscuro no se ven), y ese azul tiene contraste cercano a 4:1 sobre los dos fondos.
+_ACCENT = '#3080e0'
 _CRITICO = '#d03b3b'
-_ALERTA = '#c98500' if _ES_OSCURO else '#eda100'
-_TEXTO_CHART = '#fafafa' if _ES_OSCURO else '#0b0b0b'
-_BANDA_OPACIDAD = 0.22 if _ES_OSCURO else 0.12
-
+_ALERTA = '#e09a00'
+_BANDA_OPACIDAD = 0.18
 
 def _grafico_trayectoria(trayectoria):
     """Línea + área suave con bandas de zona (crítica/alerta) en vez de las líneas punteadas
@@ -306,7 +285,7 @@ def _grafico_trayectoria(trayectoria):
         point=alt.OverlayMarkDef(size=55, filled=False, color=_ACCENT), strokeWidth=2.6,
         strokeDash=[4, 4], color=_ACCENT,
     ).encode(x=x_enc, y=y_enc)
-    etiqueta_final = alt.Chart(df.iloc[[-1]]).mark_text(dy=-14, fontWeight='bold', color=_TEXTO_CHART).encode(
+    etiqueta_final = alt.Chart(df.iloc[[-1]]).mark_text(dy=-14, fontWeight='bold', color=_ACCENT).encode(
         x=x_enc, y=y_enc, text=alt.Text('Índice (%):Q', format='.1f'))
 
     return (bandas + linea_real + linea_proj + etiqueta_final).properties(height=280)
@@ -440,19 +419,6 @@ with col_der, st.container(border=True):
         # ocupación), como una letra chica bajo el resultado. El expander de abajo explica
         # ese margen en una sola idea, sin R² ni palabras como "validación" o "entrenamiento"
         # -- quien quiera el detalle estadístico completo puede pedirlo directamente.
-        # Punto del profesor guía: el porcentaje por sí solo no dice cuántas camas son.
-        # logica.predecir_valor() ya deja el cálculo hecho en resultado['camas'] (None si no
-        # se conoce la dotación del área). Se habla de promedio del mes porque el índice del
-        # REM son días-cama ocupados sobre días-cama disponibles durante el mes, no una foto.
-        camas = resultado.get('camas')
-        if camas:
-            st.markdown(
-                f'<span class="camas-linea">🛏️ De {camas["disponibles"]:.0f} camas del área, '
-                f'unas {camas["ocupadas"]:.0f} ocupadas y {camas["libres"]:.0f} libres '
-                f'(promedio del mes)</span>',
-                unsafe_allow_html=True,
-            )
-
         horizonte_predicho = st.session_state.get('ultimo_horizonte', horizonte)
         if logica.MAE is not None and resultado['es_prediccion']:
             mae_horizonte = logica.MAE_POR_HORIZONTE.get(horizonte_predicho, logica.MAE)
@@ -482,18 +448,14 @@ def _titulo_centrado(texto, nivel=2):
 
 
 # Colores del gráfico de alternativas (forma de 'énfasis'): el área recomendada en azul,
-# la más desocupada en naranja y el resto en gris. Ahora sí sigue a _ES_OSCURO (antes se
-# fijaba siempre en paleta clara); el texto pasa a tinta clara sobre fondo oscuro para que
-# las etiquetas de valor y la línea de umbral sigan siendo legibles.
-_COLORES_ALTERNATIVAS = (
-    {'Recomendada': '#3987e5', 'Más baja': '#d95926', 'Otras': '#8b8a84', 'texto': '#f2f1ee'}
-    if _ES_OSCURO else
-    {'Recomendada': '#2a78d6', 'Más baja': '#eb6834', 'Otras': '#a3a29c', 'texto': '#31333f'}
-)
-# pista/track del "medidor": un paso gris apenas por encima de la superficie, para que se
-# note como fondo sin competir con la barra de color de encima
-_PISTA_COLOR = '#2b303a' if _ES_OSCURO else '#eceae4'
-
+# la más desocupada en naranja y el resto en gris. Una sola paleta para los dos temas. Los
+# textos de valor, la línea de umbral y el borde al pasar el mouse usan un gris azulado
+# medio (#737d89) con contraste de 4,2:1 sobre blanco y 4,5:1 sobre el fondo oscuro.
+_COLORES_ALTERNATIVAS = {'Recomendada': '#3080e0', 'Más baja': '#e36330', 'Otras': '#9a9993',
+                         'texto': '#737d89'}
+# pista/track del "medidor": gris transparente, que sobre fondo claro se ve gris claro y
+# sobre fondo oscuro gris oscuro, sin competir con la barra de color de encima
+_PISTA_COLOR = 'rgba(128, 128, 128, 0.18)'
 
 def _etiqueta_area(nombre):
     """'Área de Hospitalización de ...' -> 'Hospitalización de ...': el prefijo se repite en
@@ -628,20 +590,20 @@ if resultado and resultado['ok']:
                         'corresponde evaluar altas a domicilio de los pacientes que, según su nivel de '
                         'criticidad, puedan continuar su tratamiento en el hogar.')
             else:
-                # Mapa: el hospital consultado en rojo, las alternativas en verde, y una
-                # linea entre ellos que es justamente la distancia que dice la lista de
-                # abajo. Los mosaicos los sirve Carto, el proveedor que Streamlit trae por
+                # Mapa: el hospital consultado en rojo, las alternativas en verde, cada uno
+                # con su nombre, y una linea entre ellos con la distancia que dice la lista
+                # de abajo. Los mosaicos los sirve Carto, el proveedor que Streamlit trae por
                 # omision: no hay clave de API ni cuenta de por medio. Si faltara la
                 # coordenada de alguno, construir_mapa() devuelve None y la seccion sigue
                 # funcionando solo con el texto.
                 vista_mapa = mapa.construir_mapa(
                     resultado['establecimiento_cod'], resultado['hospital_nombre'],
-                    resultado['valor'], sugerencia, modo_oscuro=_ES_OSCURO,
+                    resultado['valor'], sugerencia,
                 )
                 if vista_mapa is not None:
                     st.pydeck_chart(vista_mapa, width='stretch')
-                    st.caption('Distancias en línea recta. Pase el cursor sobre un punto '
-                               'para ver el detalle del hospital.')
+                    st.caption('Distancias en línea recta. Use la rueda del mouse para acercar '
+                               'o alejar, y pase el cursor sobre un punto para ver el detalle.')
                     st.write('')
 
                 # un hospital debajo del otro, cada uno a todo el ancho
