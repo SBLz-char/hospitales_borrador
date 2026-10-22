@@ -368,7 +368,7 @@ def predecir_valor(hospital_nombre, area_nombre, horizonte_label, df_subido):
      'es_prediccion', 'anio_obj', 'mes_obj'} -- las claves de predicción solo están
     presentes cuando ok=True."""
     if not hospital_nombre or not area_nombre:
-        return {'ok': False, 'es_error': False, 'mensaje': 'Elige un hospital y un área funcional.'}
+        return {'ok': False, 'es_error': False, 'mensaje': 'Elija un hospital y un área funcional.'}
 
     df_activo = dataframe_activo(df_subido)
     fila_hosp = _fila_hospital(df_activo, hospital_nombre)
@@ -388,7 +388,7 @@ def predecir_valor(hospital_nombre, area_nombre, horizonte_label, df_subido):
             'ok': False, 'es_error': True,
             'mensaje': (
                 f'No hay historial real de "{area_nombre}" para {hospital_nombre}. '
-                'Sube un archivo con al menos 1 mes de datos de esa área antes de predecir.'
+                'Suba un archivo con al menos 1 mes de datos de esa área antes de predecir.'
             ),
         }
 
