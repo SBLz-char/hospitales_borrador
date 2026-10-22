@@ -115,7 +115,7 @@ def cargar_csv_hospital(ruta_o_buffer):
     if faltantes:
         raise ColumnasFaltantesError(
             'Al archivo le faltan columnas necesarias: ' + ', '.join(faltantes) + '. '
-            'Revisa que sea un extracto con el mismo formato del REM 20 (separador ";").'
+            'Revise que sea un extracto con el mismo formato del REM 20 (separador ";").'
         )
 
     df = df.copy()
