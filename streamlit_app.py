@@ -23,8 +23,8 @@ import altair as alt  # viene incluido con Streamlit: no hay que agregarlo a req
 import pandas as pd
 import streamlit as st
 
-import explicacion
 import logica
+import mapa
 
 st.set_page_config(page_title='Predicción de Ocupación Hospitalaria', page_icon='🏥', layout='wide')
 
@@ -54,7 +54,6 @@ if _ES_OSCURO:
         margin_bg='rgba(255,255,255,.08)', margin_fg='#c3c2b7',
         reco_inst_bg='#152438', reco_inst_icon='#1c3352', reco_cit_bg='#211a35', reco_cit_icon='#2f2650',
         reco_text='#d6d4cf',
-        explica_bg='#17211c', explica_borde='#2f7d5b', explica_titulo='#6fbf9a',
     )
 else:
     _T = dict(
@@ -65,7 +64,6 @@ else:
         margin_bg='#f0efec', margin_fg='#52514e',
         reco_inst_bg='#eaf1fc', reco_inst_icon='#d7e6fa', reco_cit_bg='#f1edfc', reco_cit_icon='#e2d8f8',
         reco_text='#2f333d',
-        explica_bg='#eef6f1', explica_borde='#2f7d5b', explica_titulo='#2a6a4d',
     )
 # los "dot" de cada badge (VERDE/AZUL/AMARILLO/ROJO) usan siempre el tono de estado puro,
 # tanto en claro como en oscuro -- solo el color del TEXTO de la insignia se atenúa en
@@ -99,11 +97,6 @@ st.markdown(f"""
 .reco-icon.role-cit {{ background:{_T['reco_cit_icon']}; }}
 .reco-card p {{ font-size:14px; line-height:1.45; color:{_T['reco_text']}; margin:4px 0 0; }}
 .reco-card b {{ font-size:14.5px; letter-spacing:.2px; }}
-.caja-explica {{ background:{_T['explica_bg']}; border-left:4px solid {_T['explica_borde']};
-                 border-radius:10px; padding:14px 16px; margin-top:4px; }}
-.caja-explica p {{ font-size:14px; line-height:1.55; color:{_T['reco_text']}; margin:0; }}
-.caja-explica .titulo {{ font-size:12px; font-weight:700; letter-spacing:.4px;
-                        text-transform:uppercase; color:{_T['explica_titulo']}; margin-bottom:6px; }}
 .camas-linea {{ display:inline-block; font-size:13px; color:{_T['pill_fg']}; background:{_T['margin_bg']};
                padding:6px 12px; border-radius:8px; margin:2px 0 8px; }}
 h1#predicci-n-de-ocupaci-n-hospitalaria, .stApp h1 {{ font-size: 26px !important; }}
@@ -113,16 +106,6 @@ h1#predicci-n-de-ocupaci-n-hospitalaria, .stApp h1 {{ font-size: 26px !important
 # .streamlit/config.toml con [theme.light]/[theme.dark] (primaryColor en cada uno), no CSS
 # a mano -- así Streamlit lo aplica solo, de forma consistente, en todos sus widgets
 # nativos, y el usuario conserva el selector System/Light/Dark del menú ⋮.
-
-# La clave de la API para la explicación con IA se lee de los Secrets de Streamlit
-# (Manage app -> Settings -> Secrets) y se le pasa a explicacion.py, que es el único que la
-# usa. Nunca va en el código ni en el repositorio. Si no está configurada, explicacion.py
-# usa su texto determinista y la app funciona igual -- st.secrets lanza excepción cuando no
-# hay archivo de secretos, así que la lectura va protegida.
-try:
-    explicacion.configurar_clave(st.secrets.get('ANTHROPIC_API_KEY'))
-except Exception:
-    explicacion.configurar_clave(None)
 
 st.title('🏥 Predicción de Ocupación Hospitalaria')
 st.caption('Modelo estandarizado — cualquier hospital público de la Red REM 20')
@@ -184,7 +167,7 @@ with col_izq, st.container(border=True):
     _fecha_corte = f'{_mes_corte:02d}/{_anio_corte}'
     if st.session_state.df_subido is not None and not st.session_state.df_subido.empty:
         st.markdown(f'<span class="pill-info">📅 Datos disponibles hasta {_fecha_corte} '
-                    f'(incluye tu archivo cargado)</span>', unsafe_allow_html=True)
+                    f'(incluye su archivo cargado)</span>', unsafe_allow_html=True)
     else:
         st.markdown(f'<span class="pill-info">📅 Datos de referencia disponibles hasta '
                     f'{_fecha_corte}</span>', unsafe_allow_html=True)
@@ -248,7 +231,7 @@ with col_izq, st.container(border=True):
     # pastillas del mockup, sin tener que pelear con el CSS interno del radio de Streamlit.
     horizonte = st.pills('Horizonte de predicción', list(logica.HORIZONTES.keys()),
                          default='3 meses', selection_mode='single', required=True)
-    predecir_click = st.button('Predecir ocupación', type='primary', use_container_width=True,
+    predecir_click = st.button('Predecir ocupación', type='primary', width='stretch',
                                disabled=archivo_con_error or not (hospital and area))
 
 if predecir_click:
@@ -304,12 +287,12 @@ def _grafico_trayectoria(trayectoria):
     y_enc = alt.Y('Índice (%):Q', scale=alt.Scale(domain=[0, 100]), title='Índice ocupacional (%)')
 
     bandas = alt.Chart(pd.DataFrame([
-        {'y0': 90, 'y1': 100, 'Zona': 'Crítica (≥90%)'},
+        {'y0': 90, 'y1': 100, 'Zona': 'Crítica (>90%)'},
         {'y0': 80, 'y1': 90, 'Zona': 'Alerta (80–90%)'},
     ])).mark_rect(opacity=_BANDA_OPACIDAD).encode(
         y=alt.Y('y0:Q', scale=alt.Scale(domain=[0, 100])), y2='y1:Q',
         color=alt.Color('Zona:N', title=None,
-                        scale=alt.Scale(domain=['Alerta (80–90%)', 'Crítica (≥90%)'],
+                        scale=alt.Scale(domain=['Alerta (80–90%)', 'Crítica (>90%)'],
                                         range=[_ALERTA, _CRITICO]),
                         legend=alt.Legend(orient='bottom', direction='horizontal')),
     )
@@ -336,89 +319,103 @@ def _grafico_trayectoria(trayectoria):
 _CLASE_SEMAFORO = {'🟢 VERDE': 'good', '🔵 AZUL': 'neutral', '🟡 AMARILLO': 'warning', '🔴 ROJO': 'critical'}
 
 # Contenido ampliado de "Recomendaciones a seguir", detrás de un "Ver más" por tarjeta.
-# No reemplaza ni modifica evaluar_semaforo() de inferencia.py (compartida con app.py/Gradio):
-# es una capa puramente de presentación, solo para Streamlit, indexada por el mismo texto de
-# 'color' que ya devuelve esa función. Se redactó con respaldo de fuentes públicas chilenas
-# (Minsal, ChileAtiende, Salud Responde, SAMU) en vez de frases genéricas -- las fuentes
-# quedan documentadas acá para la memoria de título, no se muestran dentro de la app:
-#   - UGCC: minsal.cl/unidad-de-gestion-centralizada-de-casos-ugcc-...
-#   - Ley de Urgencia: chileatiende.gob.cl/fichas/2470-...  y saludresponde.minsal.cl/ley-de-urgencia
-#   - SAMU 131 / SAPU: samu.cl/preguntas-frecuentes
-#   - Discharge Before Noon (práctica internacional, no exclusiva de Chile): hospitalmedicine.org
+# El texto corto de cada tarjeta viene de evaluar_semaforo() en inferencia.py (compartida con
+# app.py/Gradio); esto es solo lo que se despliega al abrir "Ver más", indexado por el mismo
+# 'color' que devuelve esa función. Cada lista se muestra como viñetas. Las fuentes de cada
+# banda, para gestión y para ciudadanía, están en el docstring de evaluar_semaforo().
 _DETALLE_RECOMENDACION = {
     '🟢 VERDE': {
-        'institucional': (
-            'Un índice bajo es la ventana operativa para adelantar lo que la alta demanda deja '
-            'postergado: pabellones electivos complejos y mantenimientos preventivos de equipos '
-            'críticos. La gestión de camas en Chile se coordina a nivel de red a través de la '
-            'Unidad de Gestión Centralizada de Camas (UGCC) del Minsal, que usa justamente estos '
-            'períodos de holgura para nivelar la carga entre establecimientos antes de que la '
-            'demanda vuelva a subir.'
-        ),
-        'ciudadano': (
-            'Con el hospital bajo el 60% de ocupación, la atención por consultas no urgentes '
-            'debería tomar el tiempo habitual o menos. Esto no cambia lo que corresponde ante una '
-            'urgencia real (riesgo de muerte o de secuela grave): la Ley de Urgencia obliga a '
-            'atenderte de inmediato en la red pública de salud, sin exigirte pago antes de '
-            'estabilizarte.'
-        ),
+        'institucional': [
+            'Usar la capacidad disponible de camas y pabellones para avanzar en cirugías '
+            'electivas y reducir la lista de espera, como han hecho los hospitales públicos con '
+            'pabellones en horario ampliado.',
+            'Reprogramar las cirugías y procedimientos que se hayan suspendido en periodos de '
+            'alta demanda.',
+            'Revisar con anticipación el plan de la Campaña de Invierno, identificando qué camas '
+            'se pueden reconvertir y qué personal puede reforzar la urgencia.',
+        ],
+        'ciudadano': [
+            'Para controles y consultas que no son urgentes, acuda a su CESFAM.',
+            'Si pertenece a un grupo de riesgo, vacúnese contra la influenza antes del invierno. '
+            'Entre ellos están los niños pequeños, las embarazadas y las personas mayores.',
+            'Si tiene dudas sobre su salud o sobre dónde atenderse, llame a Salud Responde al '
+            '600 360 7777, que funciona gratis las 24 horas.',
+        ],
     },
     '🔵 AZUL': {
-        'institucional': (
-            'En operación regular, la prioridad es que ninguna cama quede ocupada más tiempo del '
-            'necesario. Prácticas como el "Discharge Before Noon" -- dar de alta durante la mañana '
-            'a quienes ya están listos, en vez de dejarlo para la tarde -- están documentadas en la '
-            'literatura internacional de gestión hospitalaria (Society of Hospital Medicine) como '
-            'una forma de mejorar el flujo de camas sin necesidad de medidas de contingencia.'
-        ),
-        'ciudadano': (
-            'El funcionamiento es el habitual, así que los tiempos de espera para lo no urgente son '
-            'los normales de cada servicio. Para controles o consultas que no son urgentes, tu '
-            'Cesfam o el SAPU de tu sector suelen resolver más rápido que la urgencia del hospital, '
-            'que está pensada para emergencias.'
-        ),
+        'institucional': [
+            'Mantener una gestión activa de las altas para que las camas se liberen a tiempo.',
+            'Evaluar qué pacientes cumplen los criterios de hospitalización domiciliaria, como '
+            'las personas mayores o con enfermedades crónicas cuyo cuadro se puede manejar en el '
+            'hogar.',
+            'Coordinar con la atención primaria el uso de las salas IRA y ERA, que permiten '
+            'atender y seguir a pacientes respiratorios y evitar hospitalizaciones.',
+            'Revisar la proyección a dos y tres meses. Si muestra un alza, conviene preparar '
+            'desde ya las medidas de la banda de alerta.',
+        ],
+        'ciudadano': [
+            'Si su problema no pone en riesgo su vida, prefiera un SAPU, un SAR o su CESFAM. Ahí '
+            'los tiempos de espera suelen ser menores.',
+            'Las urgencias del hospital son para situaciones graves, como pérdida de conciencia, '
+            'dolor fuerte en el pecho, dificultad grave para respirar o hemorragias abundantes.',
+            'Para orientación, llame a Salud Responde al 600 360 7777.',
+        ],
     },
     '🟡 AMARILLO': {
-        'institucional': (
-            'Acercarse al 90% es el momento de empezar a descomprimir antes de llegar al límite: '
-            'trasladar a pacientes clínicamente estables a unidades de menor complejidad libera '
-            'camas críticas para quien realmente las necesita. Es también el punto en que conviene '
-            'informar el estado a la red, ya que la UGCC del Minsal monitorea la disponibilidad de '
-            'camas críticas a nivel país y coordina derivaciones cuando un establecimiento empieza '
-            'a saturarse.'
-        ),
-        'ciudadano': (
-            'El hospital está cerca de su capacidad máxima, así que la atención de lo no urgente '
-            'puede demorar más de lo habitual. Si no es una urgencia vital, tu Cesfam o el SAPU más '
-            'cercano son alternativas más rápidas. Ante la duda de si tu situación amerita ir a '
-            'urgencia, Salud Responde (600 360 7777) orienta por teléfono antes de que te traslades.'
-        ),
+        'institucional': [
+            'Trasladar a los pacientes estables a unidades de menor complejidad y reconvertir '
+            'camas según la demanda.',
+            'Derivar a hospitalización domiciliaria a los pacientes que cumplan los criterios, '
+            'para liberar camas hospitalarias.',
+            'Reforzar la urgencia con personal y ampliar horarios si la demanda lo exige.',
+            'Si la proyección supera el 85 %, revisar los hospitales sugeridos por la aplicación '
+            'y coordinar las derivaciones con la UGCC, que busca primero en la red pública.',
+        ],
+        'ciudadano': [
+            'Si su problema no es grave, consulte en un SAPU, un SAR o su CESFAM antes que en la '
+            'urgencia del hospital.',
+            'Si tiene una emergencia que pone en riesgo su vida, acuda a la urgencia o llame al '
+            'SAMU al 131. Por ley debe ser atendido.',
+            'Si tiene dudas sobre dónde atenderse, llame a Salud Responde al 600 360 7777.',
+        ],
     },
     '🔴 ROJO': {
-        'institucional': (
-            'Sobre el umbral crítico, la acción es habilitar camas de observación transitoria '
-            '(Unidad de Corta Estadía, UCE) para absorber demanda mientras se resuelve, y activar '
-            'la coordinación con la UGCC del Minsal, que evalúa y deriva pacientes hacia otros '
-            'hospitales de la red pública según la disponibilidad real -- esa unidad gestionó '
-            'cerca de 41.000 derivaciones a nivel nacional durante los momentos más exigentes de '
-            'la pandemia.'
-        ),
-        'ciudadano': (
-            'El hospital está, o estará, sobre su capacidad. Esto no cambia lo que la ley '
-            'garantiza: si tu situación implica riesgo de muerte o de secuela grave, ningún '
-            'hospital público puede negarte la atención ni exigirte pago antes de estabilizarte '
-            '(Ley de Urgencia). Para todo lo que no sea una urgencia vital, conviene evaluar un '
-            'centro con menor demanda dentro de la red pública, tu Cesfam o el SAPU más cercano; '
-            'ante la duda, Salud Responde (600 360 7777) orienta sin que tengas que trasladarte '
-            'primero.'
-        ),
+        'institucional': [
+            'Solicitar camas a través de la UGCC. La búsqueda parte en la red pública y solo pasa '
+            'a clínicas privadas cuando la red pública está agotada.',
+            'Evaluar la suspensión temporal de cirugías electivas y no urgentes para redistribuir '
+            'el personal hacia la urgencia.',
+            'Mantener al máximo la reconversión de camas, la hospitalización domiciliaria y el '
+            'traslado de pacientes estables.',
+            'Ninguna emergencia vital puede rechazarse por falta de camas. Los traslados solo '
+            'proceden una vez que el paciente está estabilizado y con un informe del médico que '
+            'lo autorice.',
+        ],
+        'ciudadano': [
+            'Si su vida está en riesgo, acuda a la urgencia o llame al SAMU al 131. La Ley de '
+            'Urgencia obliga a atenderlo de inmediato y prohíbe exigir un cheque o documento en '
+            'garantía.',
+            'Si después de estabilizarlo es necesario trasladarlo a otro hospital, un médico debe '
+            'autorizarlo e informar las condiciones del traslado.',
+            'Para problemas que no son graves, prefiera un SAPU, un SAR o su CESFAM, o llame a '
+            'Salud Responde al 600 360 7777.',
+            'Tiene derecho a recibir información clara sobre su atención y a un trato digno. Si no '
+            'se cumple, puede reclamar en el establecimiento y, si no le responden en 15 días '
+            'hábiles, ante la Superintendencia de Salud.',
+        ],
     },
 }
+
+
+def _vinetas(puntos):
+    """Lista de recomendaciones como viñetas de Markdown."""
+    return '\n'.join(f'- {p}' for p in puntos)
+
 
 with col_der, st.container(border=True):
     resultado = st.session_state.get('ultimo_resultado')
     if not resultado:
-        st.info('Elige un hospital, un área y un horizonte, y presiona "Predecir ocupación".')
+        st.info('Elija un hospital, un área y un horizonte, y presione "Predecir ocupación".')
     elif not resultado['ok']:
         (st.error if resultado['es_error'] else st.info)(resultado['mensaje'])
     else:
@@ -472,31 +469,9 @@ with col_der, st.container(border=True):
                     f"más bajo.{nota_global}"
                 )
 
-        st.altair_chart(_grafico_trayectoria(resultado['trayectoria']), use_container_width=True,
+        st.altair_chart(_grafico_trayectoria(resultado['trayectoria']), width='stretch',
                         theme='streamlit')
         st.caption('— Real (línea sólida) ┄ Proyectado (línea punteada)')
-
-        # ── Explicación en palabras simples, debajo del gráfico ──────────────────
-        # Todo el contenido sale de explicacion.py: los números los calcula Python y la IA
-        # solo los redacta, con una verificación que descarta el texto si menciona una cifra
-        # que no se le entregó. Si no hay clave de API, si falla la llamada o si el texto no
-        # pasa esa verificación, se muestra la versión determinista -- nunca queda vacío.
-        hechos = explicacion.construir_hechos(
-            resultado,
-            sugerencia=st.session_state.get('ultima_sugerencia'),
-            mae=logica.MAE_POR_HORIZONTE.get(horizonte_predicho, logica.MAE),
-        )
-        explicada = explicacion.explicar(hechos)
-        st.markdown(
-            f'<div class="caja-explica"><div class="titulo">Qué significa esto</div>'
-            f'<p>{html.escape(explicada["texto"])}</p></div>',
-            unsafe_allow_html=True,
-        )
-        if explicada['origen'] == 'plantilla' and explicacion.hay_ia_disponible():
-            # solo interesa avisar cuando la IA estaba configurada y aun así no se usó: ahí
-            # hay algo que revisar (clave, red, o un texto descartado por la verificación)
-            with st.expander('Por qué este texto no se generó con IA'):
-                st.caption(explicada['detalle'])
 
 
 # ── Recomendaciones: sección de ancho completo, debajo del botón y del gráfico ─────
@@ -611,7 +586,7 @@ if resultado and resultado['ok']:
             )
             if detalle:
                 with st.expander('Ver más'):
-                    st.markdown(detalle['institucional'])
+                    st.markdown(_vinetas(detalle['institucional']))
         with col_reco2:
             st.markdown(
                 f'<div class="reco-card role-cit"><div class="reco-icon role-cit">🧑‍⚕️</div>'
@@ -620,7 +595,7 @@ if resultado and resultado['ok']:
             )
             if detalle:
                 with st.expander('Ver más'):
-                    st.markdown(detalle['ciudadano'])
+                    st.markdown(_vinetas(detalle['ciudadano']))
 
     # Motor de derivación: si el área queda sobre el umbral (85%), se comparan los 2
     # hospitales del mismo servicio de salud que para ese mismo mes proyectan menos.
@@ -653,6 +628,22 @@ if resultado and resultado['ok']:
                         'corresponde evaluar altas a domicilio de los pacientes que, según su nivel de '
                         'criticidad, puedan continuar su tratamiento en el hogar.')
             else:
+                # Mapa: el hospital consultado en rojo, las alternativas en verde, y una
+                # linea entre ellos que es justamente la distancia que dice la lista de
+                # abajo. Los mosaicos los sirve Carto, el proveedor que Streamlit trae por
+                # omision: no hay clave de API ni cuenta de por medio. Si faltara la
+                # coordenada de alguno, construir_mapa() devuelve None y la seccion sigue
+                # funcionando solo con el texto.
+                vista_mapa = mapa.construir_mapa(
+                    resultado['establecimiento_cod'], resultado['hospital_nombre'],
+                    resultado['valor'], sugerencia, modo_oscuro=_ES_OSCURO,
+                )
+                if vista_mapa is not None:
+                    st.pydeck_chart(vista_mapa, width='stretch')
+                    st.caption('Distancias en línea recta. Pase el cursor sobre un punto '
+                               'para ver el detalle del hospital.')
+                    st.write('')
+
                 # un hospital debajo del otro, cada uno a todo el ancho
                 for posicion, hospital_alt in enumerate(sugerencia['hospitales']):
                     if posicion:
@@ -678,10 +669,10 @@ if resultado and resultado['ok']:
                     if mas_baja['area'] != recomendada['area']:
                         st.markdown(f"**Más desocupada:** {mas_baja['area']} — {mas_baja['valor']:.1f}%")
                     st.altair_chart(_grafico_alternativas(hospital_alt['areas']),
-                                    use_container_width=True, theme='streamlit')
+                                    width='stretch', theme='streamlit')
                     with st.expander('Ver valores en tabla'):
                         st.dataframe(
                             pd.DataFrame([{'Área': a['area'], 'Índice proyectado (%)': round(a['valor'], 1)}
                                           for a in hospital_alt['areas']]),
-                            hide_index=True, use_container_width=True,
+                            hide_index=True, width='stretch',
                         )
