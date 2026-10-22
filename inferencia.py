@@ -185,28 +185,50 @@ def sugerir_coincidencias(valor, lista_valores, n=5, cutoff=0.4):
 def evaluar_semaforo(indice):
     """Capa prescriptiva de dos niveles: gubernamental/institucional (accion operativa) y
     ciudadano (lenguaje simple), sobre las mismas bandas ancladas al umbral empirico de
-    ICOVID Chile (85%/90%)."""
+    ICOVID Chile (85%/90%).
+
+    Los textos de cada banda (los de la tarjeta, aca, y los de "Ver mas", en
+    streamlit_app.py) se redactaron a partir de estas fuentes. Las referencias completas
+    estan en la bibliografia del informe de tesis:
+
+        Baja demanda (hasta 60%)
+            gestion:    MINSAL (2018, 5 de abril). MINSAL (2023, 24 de mayo).
+            ciudadania: MINSAL (2026, 23 de abril). Ventanilla Unica Social (s.f.).
+        Ocupacion media (mas de 60% hasta 80%)
+            gestion:    MINSAL (2025, 26 de mayo). MINSAL (2026, 23 de abril).
+            ciudadania: MINSAL (2018, 4 de enero). MINSAL (2021, 13 de diciembre).
+        Alerta de saturacion (mas de 80% hasta 90%)
+            gestion:    MINSAL (2018). MINSAL (2023, 24 de mayo). MINSAL (2025, 26 de mayo).
+                        24 Horas (2023).
+            ciudadania: MINSAL (2018, 4 de enero). MINSAL (2023, 24 de mayo).
+                        Superintendencia de Salud (2025).
+        Saturacion critica (mas de 90%)
+            gestion:    MINSAL (2018). 24 Horas (2023). Superintendencia de Salud (2025).
+            ciudadania: Superintendencia de Salud (2025). Superintendencia de Salud (s.f.).
+                        MINSAL (2018, 4 de enero).
+
+    Los nombres de cada nivel ('nivel') y su color no cambian: solo los textos."""
     if indice <= 60:
         return {
             'color': '🟢 VERDE', 'nivel': 'Capacidad con holgura',
-            'institucional': 'Programar mantenimientos preventivos y cirugías electivas complejas aprovechando la disponibilidad de camas.',
-            'ciudadano': 'Este hospital tiene camas disponibles. La atención debería ser expedita.',
+            'institucional': 'El área tiene capacidad disponible. Es un buen momento para avanzar en listas de espera y preparar los meses de mayor demanda.',
+            'ciudadano': 'Este hospital tiene camas disponibles y la atención debería ser expedita.',
         }
     elif indice <= 80:
         return {
             'color': '🔵 AZUL', 'nivel': 'Operación regular',
-            'institucional': 'Agilizar el giro de camas con altas tempranas (Discharge Before Noon) para mantener margen operativo.',
-            'ciudadano': 'El hospital opera con normalidad. Pueden existir tiempos de espera habituales.',
+            'institucional': 'El área opera con normalidad. Se recomienda mantener el flujo de altas y vigilar la tendencia de los próximos meses.',
+            'ciudadano': 'El hospital opera con normalidad y pueden existir tiempos de espera habituales.',
         }
     elif indice <= 90:
         return {
             'color': '🟡 AMARILLO', 'nivel': 'Alerta de saturación inminente',
-            'institucional': 'Trasladar pacientes estables a unidades de menor complejidad y liberar camas críticas.',
-            'ciudadano': 'El hospital está cerca de su capacidad máxima. Es posible que la atención no urgente demore más de lo habitual.',
+            'institucional': 'El área se acerca a su capacidad máxima. Se recomienda activar las medidas de contingencia y liberar camas para los pacientes más graves.',
+            'ciudadano': 'El hospital está cerca de su capacidad máxima. La atención que no es urgente podría demorar más de lo habitual.',
         }
     else:
         return {
             'color': '🔴 ROJO', 'nivel': 'Saturación crítica proyectada',
-            'institucional': 'Habilitar camas de observación transitoria (UCE) y coordinar derivaciones vía UGCC.',
-            'ciudadano': 'El hospital está, o estará, sobre su capacidad. Para atención no urgente, considera consultar otro centro si es posible.',
+            'institucional': 'Se proyecta una saturación crítica. Se recomienda solicitar camas a través de la red y priorizar la atención de los pacientes más graves.',
+            'ciudadano': 'El hospital está, o estará, sobre su capacidad. Para atención no urgente, considere otro centro de salud. Ante una emergencia vital, acuda siempre a la urgencia.',
         }
