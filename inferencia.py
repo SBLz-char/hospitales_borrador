@@ -11,6 +11,12 @@ hospital, area y el mes/horizonte a proyectar.
 El horizonte se limita a HORIZONTE_MAXIMO meses desde el ultimo dato real: desde el
 mes 4 los tres rezagos (LAG1, LAG2, ROLL3) ya serian solo predicciones del propio
 modelo, sin ningun dato real.
+
+Rezagos (modelo v4, Avance 06): en cada paso se buscan por mes calendario en la historia
+(real + ya proyectada), con la misma definicion que pipeline.compute_lag_features: LAG_k
+es el mes t-k exacto y ROLL3 el promedio de los meses existentes entre t-1 y t-3. Si un
+mes no existe, el rezago queda vacio (NaN) y LightGBM lo trata como dato faltante, igual
+que en el entrenamiento.
 """
 import difflib
 import math
@@ -56,6 +62,12 @@ def _normalizar(txt):
 
 def periodo_siguiente(anio, mes):
     total = anio * 12 + (mes - 1) + 1
+    return total // 12, (total % 12) + 1
+
+
+def mes_anterior(anio, mes, k):
+    """El mes k meses antes de (anio, mes), para buscar los rezagos por calendario."""
+    total = anio * 12 + (mes - 1) - k
     return total // 12, (total % 12) + 1
 
 
@@ -110,7 +122,7 @@ def predecir_recursivo(modelo, features, artefactos, df_historico,
             f'{ultimo_mes}/{ultimo_anio} y el horizonte maximo es {HORIZONTE_MAXIMO} meses.'
         )
 
-    valores = [v for (_, _, v) in serie]
+    conocidos = {(a, m): v for (a, m, v) in serie}  # meses reales; se les suman los proyectados
     trayectoria = [(a, m, v, True) for (a, m, v) in serie[-6:]]  # ultimos 6 reales, para mostrar contexto
 
     if promedio_camas_disponible is None:
@@ -132,15 +144,21 @@ def predecir_recursivo(modelo, features, artefactos, df_historico,
     zona_enc = artefactos['mapping_zona'].get(glosa_sss, artefactos['global_mean_zona'])
     area_enc = artefactos['mapping_area'].get(area_funcional_nombre, artefactos['global_mean_zona'])
     media_global = artefactos['media_global_train']
+    # los artefactos del modelo mandan: el v4 se entreno dejando en NaN los meses que
+    # faltan, asi que la prediccion tiene que dejarlos igual (y rellenarlos si el .pkl
+    # dijera lo contrario)
+    relleno = media_global if artefactos.get('rellenar_meses_faltantes', True) else np.nan
 
     cursor_anio, cursor_mes = ultimo_anio, ultimo_mes
     pred = None
     while (cursor_anio, cursor_mes) != (anio_obj, mes_obj):
         cursor_anio, cursor_mes = periodo_siguiente(cursor_anio, cursor_mes)
 
-        lag1 = valores[-1] if len(valores) >= 1 else media_global
-        lag2 = valores[-2] if len(valores) >= 2 else media_global
-        roll3 = float(np.mean(valores[-3:])) if len(valores) >= 1 else media_global
+        previos = [conocidos.get(mes_anterior(cursor_anio, cursor_mes, k)) for k in (1, 2, 3)]
+        lag1 = previos[0] if previos[0] is not None else relleno
+        lag2 = previos[1] if previos[1] is not None else relleno
+        existentes = [v for v in previos if v is not None]
+        roll3 = float(np.mean(existentes)) if existentes else relleno
 
         mes_sin = math.sin(2 * math.pi * cursor_mes / 12)
         mes_cos = math.cos(2 * math.pi * cursor_mes / 12)
@@ -155,7 +173,7 @@ def predecir_recursivo(modelo, features, artefactos, df_historico,
 
         pred = float(modelo.predict(vector)[0])
         pred = min(max(pred, 0.0), 100.0)  # mismo techo fisico usado en entrenamiento (capping a 100%)
-        valores.append(pred)
+        conocidos[(cursor_anio, cursor_mes)] = pred
         trayectoria.append((cursor_anio, cursor_mes, pred, False))
 
     return pred, trayectoria, True
