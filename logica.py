@@ -39,7 +39,7 @@ from pipeline import clasificar_complejidad
 import geo
 
 DIR_BASE = os.path.dirname(os.path.abspath(__file__))
-RUTA_MODELO = os.path.join(DIR_BASE, 'modelo_ocupacion_hospitalaria_v3.pkl')
+RUTA_MODELO = os.path.join(DIR_BASE, 'modelo_ocupacion_hospitalaria_v4.pkl')
 RUTA_REFERENCIA = os.path.join(DIR_BASE, 'dataset_referencia.parquet')
 
 HORIZONTES = {'1 mes': 1, '2 meses': 2, '3 meses': 3}
@@ -57,12 +57,13 @@ ARTEFACTOS = _artefacto['artefactos']
 _metricas_test = _artefacto.get('metricas_test') or {}
 _por_horizonte = (_artefacto.get('metricas_por_horizonte') or {}).get('horizontes') or {}
 
-MAE = _metricas_test.get('MAE')  # 7.358 pp
-R2 = _metricas_test.get('R2')    # 0.862
+MAE = _metricas_test.get('MAE')  # 7.396 pp
+R2 = _metricas_test.get('R2')    # 0.861
 
 # Lo mismo por horizonte, con la etiqueta de HORIZONTES como clave ('1 mes', '2 meses',
 # '3 meses'). Son el error de la predicción recursiva, que es la que hace la app, y es
-# mayor que el de un paso: MAE 7.84 / 9.25 / 10.08 pp.
+# mayor que el de un paso. El v4.pkl no las trae, así que quedan vacías y la interfaz
+# muestra el MAE general para los tres horizontes.
 MAE_POR_HORIZONTE = {etiqueta: _por_horizonte[str(meses)]['MAE']
                      for etiqueta, meses in HORIZONTES.items() if str(meses) in _por_horizonte}
 R2_POR_HORIZONTE = {etiqueta: _por_horizonte[str(meses)]['R2']
