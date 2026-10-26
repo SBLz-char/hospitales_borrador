@@ -3,11 +3,18 @@ Pipeline de features V3 (Avance 05) — sin identidad de hospital, sin fuga temp
 Extiende el diseno de Avance 04, sacando las variables de fuga que Sebastian identifico
 y que Avance 04 todavia no habia sacado: DIAS_ESTADA, NUMERO_EGRESOS, EGRESOS_FALLECIDOS,
 TRASLADOS, PROMEDIO_DIAS_ESTADA, LETALIDAD (describen el mismo mes que se predice).
+
+Cambio de esta version (modelo v4, Avance 06, notebook modelo_predictivo_V6): los rezagos
+se calculan por mes calendario y no por filas. Con shift() el "mes anterior" era la fila
+anterior de la serie, asi que con meses sin registro podia venir de anios atras; ahora
+LAG_k es el mes t-k exacto. Los meses que no existen quedan en NaN y LightGBM los maneja
+como dato faltante, sin rellenarlos con el promedio.
 """
 import pandas as pd
 import numpy as np
 
 GROUP_KEYS = ['CODIGO_ESTABLECIMIENTO', 'COD_AREA_FUNCIONAL']
+RELLENAR_MESES_FALTANTES = False  # False: NaN (lo maneja LightGBM). True: media_global_train, como en V5
 
 LEAKAGE_MATEMATICA = ['DIAS_CAMAS_OCUPADAS', 'DIAS_CAMAS_DISPONIBLES', 'INDICE_OCUPACIONAL', 'INDICE_ROTACION']
 LEAKAGE_TEMPORAL_NOWCASTING = ['DIAS_ESTADA', 'NUMERO_EGRESOS', 'EGRESOS_FALLECIDOS',
@@ -23,15 +30,23 @@ FEATURES_V3 = [
 
 
 def compute_lag_features(df, group_keys, target_col, fill_value=None):
-    """LAG1, LAG2 y ROLL3 de target_col, agrupado por group_keys.
-    Reutilizable en entrenamiento y en inferencia (prediccion recursiva)."""
+    """LAG1, LAG2 y ROLL3 de target_col por mes calendario dentro de cada group_keys:
+    LAG_k es el valor del mes t-k exacto (NaN si ese mes no esta en los datos) y ROLL3 el
+    promedio de los meses existentes entre t-1 y t-3, asi ningun rezago usa datos de mas de
+    3 meses atras. Si fill_value no es None, rellena los NaN. Mantiene el orden y el numero
+    de filas de df. Misma definicion que usa la prediccion recursiva de inferencia.py."""
     df = df.copy()
-    grouped = df.groupby(group_keys)[target_col]
-    df['LAG1_OCUPACION'] = grouped.shift(1)
-    df['LAG2_OCUPACION'] = grouped.shift(2)
-    df['ROLL3_OCUPACION'] = grouped.transform(
-        lambda x: x.shift(1).rolling(window=3, min_periods=1).mean()
-    )
+    idx_mes = df['PERIODO'] * 12 + df['MES'] - 1
+    claves = df[group_keys].assign(_IDX=idx_mes)
+    # si un mes viene repetido para el mismo hospital+area se conserva uno solo (el ultimo)
+    base = claves.assign(_VALOR=df[target_col]).drop_duplicates(group_keys + ['_IDX'], keep='last')
+    previos = {}
+    for k in (1, 2, 3):
+        desplazado = base.assign(_IDX=base['_IDX'] + k)
+        previos[k] = claves.merge(desplazado, on=group_keys + ['_IDX'], how='left')['_VALOR'].to_numpy()
+    df['LAG1_OCUPACION'] = previos[1]
+    df['LAG2_OCUPACION'] = previos[2]
+    df['ROLL3_OCUPACION'] = pd.DataFrame(previos).mean(axis=1).to_numpy()
     if fill_value is not None:
         for col in ['LAG1_OCUPACION', 'LAG2_OCUPACION', 'ROLL3_OCUPACION']:
             df[col] = df[col].fillna(fill_value)
@@ -88,7 +103,8 @@ def construir_features(df, train_mask):
     df['MES_COS'] = np.cos(2 * np.pi * df['MES'] / 12)
 
     media_global_train = df.loc[train_mask, 'TARGET'].mean()
-    df = compute_lag_features(df, GROUP_KEYS, 'TARGET', fill_value=media_global_train)
+    df = compute_lag_features(df, GROUP_KEYS, 'TARGET',
+                              fill_value=media_global_train if RELLENAR_MESES_FALTANTES else None)
 
     df_train = df[train_mask].copy()
     df_resto = df[~train_mask].copy()
@@ -103,5 +119,7 @@ def construir_features(df, train_mask):
         'mapping_zona': mapping_zona,
         'mapping_area': mapping_area,
         'global_mean_zona': df_train['TARGET'].mean(),
+        'rellenar_meses_faltantes': RELLENAR_MESES_FALTANTES,
+        'camas_por_hospital': df.groupby('CODIGO_ESTABLECIMIENTO')['PROMEDIO_CAMAS_DISPONIBLE'].mean().to_dict(),
     }
     return df, artefactos
